@@ -1,0 +1,157 @@
+# Zulea uploader (stage 1: PTT dry-run)
+
+`zulea-upbrr` connects the Zulea release pipeline to upbrr. It reuses the
+ready-made pipeline outputs (frozen name, NFO, description with screenshots,
+Torrent Maker torrent) and the upbrr PTT tracker definition. Nothing is
+recomputed and nothing in the library is written.
+
+**Stage 1 is dry-run only.** There is no upload command. `zulea-upbrr upload`
+refuses explicitly.
+
+## Chain of evidence
+
+Every link must hold, otherwise the release is a `STOP` and the next release
+continues:
+
+1. **Freeze** (`internal/zulea/freeze`):
+   - SHA-256 of the freeze file equals the configured value;
+   - exact 9-column header;
+   - exactly one record for the release, with status `OK`;
+   - MKV `stat` identity (inode, size, mtime seconds) equals the freeze.
+2. **Release directory** (`internal/zulea/input`):
+   - a real directory, not a symlink;
+   - exactly one `.mkv` and one `.nfo`;
+   - no `*.partial*`, `*.journal` or `*.lock` entries.
+3. **NFO**:
+   - non-empty;
+   - exactly one `RELEASE.........:` line, equal to the directory name;
+   - `stat` and SHA-256 equal the Torrent Maker manifest row.
+4. **Torrent Maker manifest** (`internal/zulea/tm`):
+   - `TRYB=APPLY`;
+   - exactly one row for the release, with `WYNIK=OK`;
+   - the profile status is `APPLY_OK` or `ALREADY_OK`;
+   - MKV identity, `TMDB_ID` and `SOURCE_ID` equal the freeze.
+5. **TM torrent**:
+   - strict canonical bencode;
+   - `info` keys are exactly `files, name, piece length, pieces, private`;
+   - `private=1` and `name` = release;
+   - files are exactly the MKV and the NFO, with on-disk sizes;
+   - the piece count matches;
+   - there is no `source`;
+   - the file SHA-256 and the infohash equal the manifest.
+6. **Title** (`internal/zulea/names`): a byte-for-byte port of the Release
+   Panel rule `names.py` v0.2.2, using the TMDB titles file.
+7. **TMDB** (`internal/zulea/tmdb`):
+   - one `GET /movie/{TMDB_ID}`, by the frozen id only (decision D-2);
+   - no name search and no other provider;
+   - the returned `id` must equal the freeze.
+8. **PTT payload** (`internal/zulea/pttplan`). The upbrr PTT definition
+   (`unit3d.Definition.Prepare`, `PreparationIntentDryRun`) builds the
+   preview, and the plan stops unless all of these hold:
+   - `name` is the `names.py` title;
+   - `description` is the ready description (upbrr trims surrounding
+     whitespace only);
+   - the torrent is the upload copy and carries the TM `info` bytes verbatim
+     (same infohash), with no announce, passkey or source;
+   - the NFO is the library NFO and its SHA-256 equals the manifest;
+   - `tmdb` is the frozen id;
+   - MediaInfo is present and BDInfo is empty.
+
+The adapter never opens `<REL>.screens.json`. Screenshot links come only
+from the description.
+
+## Architecture: what comes from upbrr
+
+| Piece | Source |
+|---|---|
+| PTT endpoint, payload fields, category/type/resolution IDs, banned groups, final-description handling | upbrr `internal/trackers/impl/unit3d` + `sites/ptt` (unchanged) |
+| MediaInfo text | upbrr `internal/metadata/mediainfo` (go-mediainfo), written below `work_dir` |
+| Path and secret helpers | upbrr `internal/pathing`, `internal/redaction` |
+| Freeze, manifest, torrent, names, adapter, narrow TMDB | this package (new code) |
+
+No upbrr core file is modified. The TM torrent reaches the PTT definition as
+the prepared upload artifact. Because of that, upbrr's torrent building
+(mkbrr hashing, hardlink or copy staging) and personalization (`source`)
+never run.
+
+A new tracker profile (for example CinemaMovies later) is a new
+`input.Profile` value: description suffix, torrent suffix, TM profile column
+and title choice. The adapter needs no change.
+
+## Configuration
+
+The config is JSON, mode `0600`, and unknown fields are rejected. It holds
+**no secret values**: keys live in separate `0600` files.
+
+```json
+{
+  "library_root": "/srv/library",
+  "freeze_path": "/srv/freeze/zulea-frozen-names-YYYYMMDD-HHMMSS.tsv",
+  "freeze_sha256": "<64 lowercase hex>",
+  "titles_path": "/srv/release-panel/tmdb-titles.tsv",
+  "manifest_path": "/srv/tm/runs/<run-id>/manifest-YYYYMMDD-HHMMSS.tsv",
+  "tm_output_dir": "/srv/tm/output/<run-id>",
+  "work_dir": "/srv/zulea-upbrr/work",
+  "tmdb_key_file": "/srv/zulea-upbrr/secrets/tmdb.key",
+  "trackers": ["PTT"],
+  "ptt": {
+    "api_key_file": "/srv/zulea-upbrr/secrets/ptt.key",
+    "anonymous": false,
+    "personal_release": false,
+    "mod_queue": false,
+    "taxonomy": {
+      "category": {"MOVIE": "<id>"},
+      "type": {"REMUX": "<id>"},
+      "resolution": {"2160p": "<id>", "1080p": "<id>", "1080i": "<id>", "720p": "<id>", "576i": "<id>", "480i": "<id>"}
+    }
+  }
+}
+```
+
+- `trackers` empty means nothing runs; stage 1 accepts only `PTT`.
+- `work_dir` and `library_root` must not overlap. Mount the library read-only.
+- Omit `taxonomy` until the owner confirms the PTT form IDs. The dry-run then
+  reports `ID PTT potwierdzone: false` and uses upbrr's Unit3D defaults.
+  Once set, any mismatch is a STOP.
+- `api_key_file` is optional for dry-run. The key is never transmitted in
+  dry-run.
+
+## Usage
+
+```bash
+zulea-upbrr check-config --config /srv/zulea-upbrr/zulea.json
+zulea-upbrr plan --config /srv/zulea-upbrr/zulea.json --release <REL>
+zulea-upbrr plan --config /srv/zulea-upbrr/zulea.json --list releases.txt
+zulea-upbrr names --titles tmdb-titles.tsv --tmdb-id <ID> <REL>
+```
+
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| 0 | all releases READY |
+| 3 | at least one STOP |
+| 2 | usage or config error |
+| 1 | runtime error |
+
+The full plan for each release is written to
+`work_dir/reports/<REL>.ptt.<fingerprint16>.json` (mode `0600`). It includes
+the description, MediaInfo and file digests. The `fingerprint` is SHA-256
+over the canonical payload and file digests: the exact content a later,
+human-confirmed upload must reproduce.
+
+## Tests
+
+All tests are offline:
+
+```bash
+go test -race ./internal/zulea/... ./cmd/zulea-upbrr/
+```
+
+- TMDB is a loopback `httptest` server. The end-to-end test fails on any
+  other network request.
+- The golden name file comes from the reference `names.py` on synthetic
+  names, via `scripts/zulea/gen_names_golden.py`.
+- A private sample can be compared locally through
+  `ZULEA_NAMES_PRIVATE_CASES` and `ZULEA_NAMES_PRIVATE_GOLDEN`. It never
+  enters the repository.

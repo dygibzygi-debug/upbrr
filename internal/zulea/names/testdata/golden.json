@@ -1,0 +1,426 @@
+{
+ "rule_version": "0.2.2",
+ "results": [
+  {
+   "release": "Example.Film.2019.MULTi.1080p.REMUX.BluRay.AVC.TrueHD.Atmos.7.1-Zulea",
+   "record": "foreign",
+   "cinemamovies": "Przykładowy film / Example Film [2019] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [TrueHD.Atmos.7.1] [AVC]",
+   "ptt": "Przykładowy film / Example Film 2019 MULTi 1080p BluRay REMUX AVC TrueHD Atmos 7.1-Zulea",
+   "warnings": [],
+   "error": null
+  },
+  {
+   "release": "Example.Film.2019.MULTi.1080p.REMUX.BluRay.AVC.TrueHD.Atmos.7.1-Zulea",
+   "record": null,
+   "cinemamovies": "Example Film [2019] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [TrueHD.Atmos.7.1] [AVC]",
+   "ptt": "Example Film 2019 MULTi 1080p BluRay REMUX AVC TrueHD Atmos 7.1-Zulea",
+   "warnings": [
+    "brak tytułu z TMDB — użyto tytułu z nazwy release'u (bez polskich znaków)"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Show.2012.MULTi.2160p.UHD.REMUX.BluRay.HDR.HEVC.TrueHD.Atmos.7.1-Zulea",
+   "record": "foreign",
+   "cinemamovies": "Przykładowy film / Example Film [2012] [MULTi] [2160p] [UHD] [REMUX] [BluRay-Zulea] [HDR] [TrueHD.Atmos.7.1] [HEVC]",
+   "ptt": "Przykładowy film / Example Film 2012 MULTi 2160p UHD BluRay REMUX HDR HEVC TrueHD Atmos 7.1-Zulea",
+   "warnings": [],
+   "error": null
+  },
+  {
+   "release": "Example.Show.2012.MULTi.2160p.UHD.REMUX.BluRay.DV.HDR10Plus.HEVC.DTS-HD.MA.5.1-Zulea",
+   "record": "nonlatin",
+   "cinemamovies": "Japoński przykład / Japanese Example [2012] [MULTi] [2160p] [UHD] [REMUX] [BluRay-Zulea] [DV] [HDR10Plus] [DTS-HD.MA.5.1] [HEVC]",
+   "ptt": "Japoński przykład / Japanese Example 2012 MULTi 2160p UHD BluRay REMUX DV HDR10Plus HEVC DTS-HD MA 5.1-Zulea",
+   "warnings": [
+    "tytuł oryginalny nie jest w alfabecie łacińskim — użyto tytułu angielskiego z TMDB"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Show.2012.PL.2160p.UHD.REMUX.BluRay.DV.HEVC.DDPlus.Atmos.5.1-Zulea",
+   "record": "polish",
+   "cinemamovies": "Polski przykład [2012] [PL] [2160p] [UHD] [REMUX] [BluRay-Zulea] [DV] [DDPlus.Atmos.5.1] [HEVC]",
+   "ptt": "Polski przykład 2012 PL 2160p UHD BluRay REMUX DV HEVC DDPlus Atmos 5.1-Zulea",
+   "warnings": [],
+   "error": null
+  },
+  {
+   "release": "Polski.Przyklad.1978.PL.1080i.REMUX.BluRay.AVC.DD.2.0-Zulea",
+   "record": "polish",
+   "cinemamovies": "Polski przykład [1978] [PL] [1080i] [REMUX] [BluRay-Zulea] [DD.2.0] [AVC]",
+   "ptt": "Polski przykład 1978 PL 1080i BluRay REMUX AVC DD 2.0-Zulea",
+   "warnings": [],
+   "error": null
+  },
+  {
+   "release": "Polski.Przyklad.1978.PL.1080i.REMUX.BluRay.AVC.DD.2.0-Zulea",
+   "record": "polish_upper",
+   "cinemamovies": "Oryginał [1978] [PL] [1080i] [REMUX] [BluRay-Zulea] [DD.2.0] [AVC]",
+   "ptt": "Oryginał 1978 PL 1080i BluRay REMUX AVC DD 2.0-Zulea",
+   "warnings": [],
+   "error": null
+  },
+  {
+   "release": "Polski.Przyklad.1978.PL.1080i.REMUX.BluRay.AVC.DD.2.0-Zulea",
+   "record": "polish_empty",
+   "cinemamovies": "Polski Przyklad [1978] [PL] [1080i] [REMUX] [BluRay-Zulea] [DD.2.0] [AVC]",
+   "ptt": "Polski Przyklad 1978 PL 1080i BluRay REMUX AVC DD 2.0-Zulea",
+   "warnings": [
+    "TMDB bez tytułu — użyto tytułu z nazwy release'u"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Film.1939.MULTi.1080p.REMUX.BluRay.AVC.FLAC.2.0-Zulea",
+   "record": "nonlatin_no_en",
+   "cinemamovies": "Example Film [1939] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [FLAC.2.0] [AVC]",
+   "ptt": "Example Film 1939 MULTi 1080p BluRay REMUX AVC FLAC 2.0-Zulea",
+   "warnings": [
+    "tytuł oryginalny nie jest w alfabecie łacińskim — użyto tytułu angielskiego z TMDB",
+    "TMDB bez tytułów — użyto tytułu z nazwy release'u"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Film.1939.MULTi.1080p.REMUX.BluRay.AVC.FLAC.2.0-Zulea",
+   "record": "identical",
+   "cinemamovies": "Example Film [1939] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [FLAC.2.0] [AVC]",
+   "ptt": "Example Film 1939 MULTi 1080p BluRay REMUX AVC FLAC 2.0-Zulea",
+   "warnings": [],
+   "error": null
+  },
+  {
+   "release": "Example.Film.1939.MULTi.1080p.REMUX.BluRay.AVC.FLAC.2.0-Zulea",
+   "record": "casefold",
+   "cinemamovies": "STRASSE [1939] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [FLAC.2.0] [AVC]",
+   "ptt": "STRASSE 1939 MULTi 1080p BluRay REMUX AVC FLAC 2.0-Zulea",
+   "warnings": [],
+   "error": null
+  },
+  {
+   "release": "Example.Film.1939.MULTi.1080p.REMUX.BluRay.AVC.FLAC.2.0-Zulea",
+   "record": "no_pl",
+   "cinemamovies": "Exemple [1939] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [FLAC.2.0] [AVC]",
+   "ptt": "Exemple 1939 MULTi 1080p BluRay REMUX AVC FLAC 2.0-Zulea",
+   "warnings": [
+    "brak polskiego tytułu w TMDB"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Film.1939.MULTi.1080p.REMUX.BluRay.AVC.FLAC.2.0-Zulea",
+   "record": "empty_all",
+   "cinemamovies": "Example Film [1939] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [FLAC.2.0] [AVC]",
+   "ptt": "Example Film 1939 MULTi 1080p BluRay REMUX AVC FLAC 2.0-Zulea",
+   "warnings": [
+    "TMDB bez tytułów — użyto tytułu z nazwy release'u"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Film.1939.MULTi.1080p.REMUX.BluRay.AVC.FLAC.2.0-Zulea",
+   "record": "slash",
+   "cinemamovies": "Raz / Dwa / One [1939] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [FLAC.2.0] [AVC]",
+   "ptt": "Raz / Dwa / One 1939 MULTi 1080p BluRay REMUX AVC FLAC 2.0-Zulea",
+   "warnings": [
+    "tytuł zawiera ' / ' — sprawdź podział tytułów"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Film.1939.MULTi.1080p.REMUX.BluRay.AVC.FLAC.2.0-Zulea",
+   "record": "control",
+   "cinemamovies": "Tytuł zbiałymi znakami / Title Here [1939] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [FLAC.2.0] [AVC]",
+   "ptt": "Tytuł zbiałymi znakami / Title Here 1939 MULTi 1080p BluRay REMUX AVC FLAC 2.0-Zulea",
+   "warnings": [],
+   "error": null
+  },
+  {
+   "release": "Example.Film.1939.MULTi.1080p.REMUX.BluRay.AVC.FLAC.2.0-Zulea",
+   "record": "latin_ext",
+   "cinemamovies": "Czeski przykład / Příklad Ångström ǅ ﬁ [1939] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [FLAC.2.0] [AVC]",
+   "ptt": "Czeski przykład / Příklad Ångström ǅ ﬁ 1939 MULTi 1080p BluRay REMUX AVC FLAC 2.0-Zulea",
+   "warnings": [],
+   "error": null
+  },
+  {
+   "release": "Example.Film.1939.MULTi.1080p.REMUX.BluRay.AVC.FLAC.2.0-Zulea",
+   "record": "mixed_script",
+   "cinemamovies": "Grecki / Alpha Omega [1939] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [FLAC.2.0] [AVC]",
+   "ptt": "Grecki / Alpha Omega 1939 MULTi 1080p BluRay REMUX AVC FLAC 2.0-Zulea",
+   "warnings": [
+    "tytuł oryginalny nie jest w alfabecie łacińskim — użyto tytułu angielskiego z TMDB"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Film.1939.MULTi.1080p.REMUX.BluRay.AVC.FLAC.2.0-Zulea",
+   "record": "digits_only_orig",
+   "cinemamovies": "Liczby / Nineteen [1939] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [FLAC.2.0] [AVC]",
+   "ptt": "Liczby / Nineteen 1939 MULTi 1080p BluRay REMUX AVC FLAC 2.0-Zulea",
+   "warnings": [
+    "tytuł oryginalny nie jest w alfabecie łacińskim — użyto tytułu angielskiego z TMDB"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Film.1939.MULTi.1080p.REMUX.BluRay.AVC.FLAC.2.0-Zulea",
+   "record": "fullwidth",
+   "cinemamovies": "Szeroki / ABC [1939] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [FLAC.2.0] [AVC]",
+   "ptt": "Szeroki / ABC 1939 MULTi 1080p BluRay REMUX AVC FLAC 2.0-Zulea",
+   "warnings": [
+    "tytuł oryginalny nie jest w alfabecie łacińskim — użyto tytułu angielskiego z TMDB"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Film.2001.MULTi.DiSC2.1080p.REMUX.BluRay.VC-1.DTS-HD.HRA.5.1-Zulea",
+   "record": "foreign",
+   "cinemamovies": "Przykładowy film / Example Film [2001] [DiSC2] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [DTS-HD.HRA.5.1] [VC-1]",
+   "ptt": "Przykładowy film / Example Film 2001 DiSC2 MULTi 1080p BluRay REMUX VC-1 DTS-HD HRA 5.1-Zulea",
+   "warnings": [],
+   "error": null
+  },
+  {
+   "release": "Example.Film.2001.MULTi.Extended.1080p.REMUX.BluRay.MPEG-2.LPCM.2.0-Zulea",
+   "record": "foreign",
+   "cinemamovies": "Przykładowy film / Example Film [2001] [Extended] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [LPCM.2.0] [MPEG-2]",
+   "ptt": "Przykładowy film / Example Film 2001 Extended MULTi 1080p BluRay REMUX MPEG-2 LPCM 2.0-Zulea",
+   "warnings": [
+    "nietypowy znacznik w nazwie: Extended"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Film.2001.1080p.REMUX.BluRay.AVC.DTS.5.1-Zulea",
+   "record": "foreign",
+   "cinemamovies": "Przykładowy film / Example Film [2001] [1080p] [REMUX] [BluRay-Zulea] [DTS.5.1] [AVC]",
+   "ptt": "Przykładowy film / Example Film 2001 1080p BluRay REMUX AVC DTS 5.1-Zulea",
+   "warnings": [
+    "brak znacznika języka (PL/MULTi) w nazwie"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Film.2001.MULTi.576i.REMUX.BluRay.MPEG-2.AAC.2.0-Zulea",
+   "record": null,
+   "cinemamovies": "Example Film [2001] [MULTi] [576i] [REMUX] [BluRay-Zulea] [AAC.2.0] [MPEG-2]",
+   "ptt": "Example Film 2001 MULTi 576i BluRay REMUX MPEG-2 AAC 2.0-Zulea",
+   "warnings": [
+    "brak tytułu z TMDB — użyto tytułu z nazwy release'u (bez polskich znaków)"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Film.2001.MULTi.480p.REMUX.BluRay.AVC.DTS-X.7.1-Zulea",
+   "record": null,
+   "cinemamovies": "Example Film [2001] [MULTi] [480p] [REMUX] [BluRay-Zulea] [DTS-X.7.1] [AVC]",
+   "ptt": "Example Film 2001 MULTi 480p BluRay REMUX AVC DTS-X 7.1-Zulea",
+   "warnings": [
+    "brak tytułu z TMDB — użyto tytułu z nazwy release'u (bez polskich znaków)"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Film.2001.MULTi.720p.REMUX.BluRay.AVC.DDPlus.5.1-Zulea",
+   "record": null,
+   "cinemamovies": "Example Film [2001] [MULTi] [720p] [REMUX] [BluRay-Zulea] [DDPlus.5.1] [AVC]",
+   "ptt": "Example Film 2001 MULTi 720p BluRay REMUX AVC DDPlus 5.1-Zulea",
+   "warnings": [
+    "brak tytułu z TMDB — użyto tytułu z nazwy release'u (bez polskich znaków)"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Film.2001.MULTi.2160p.UHD.REMUX.BluRay.HLG.HEVC.TrueHD.7.1-Zulea",
+   "record": null,
+   "cinemamovies": "Example Film [2001] [MULTi] [2160p] [UHD] [REMUX] [BluRay-Zulea] [HLG] [TrueHD.7.1] [HEVC]",
+   "ptt": "Example Film 2001 MULTi 2160p UHD BluRay REMUX HLG HEVC TrueHD 7.1-Zulea",
+   "warnings": [
+    "brak tytułu z TMDB — użyto tytułu z nazwy release'u (bez polskich znaków)"
+   ],
+   "error": null
+  },
+  {
+   "release": "2001.1968.MULTi.1080p.REMUX.BluRay.AVC.DTS-HD.MA.5.1-Zulea",
+   "record": null,
+   "cinemamovies": "2001 [1968] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [DTS-HD.MA.5.1] [AVC]",
+   "ptt": "2001 1968 MULTi 1080p BluRay REMUX AVC DTS-HD MA 5.1-Zulea",
+   "warnings": [
+    "brak tytułu z TMDB — użyto tytułu z nazwy release'u (bez polskich znaków)"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.2019.2020.MULTi.1080p.REMUX.BluRay.AVC.DTS-HD.MA.5.1-Zulea",
+   "record": null,
+   "cinemamovies": "Example 2019 [2020] [MULTi] [1080p] [REMUX] [BluRay-Zulea] [DTS-HD.MA.5.1] [AVC]",
+   "ptt": "Example 2019 2020 MULTi 1080p BluRay REMUX AVC DTS-HD MA 5.1-Zulea",
+   "warnings": [
+    "brak tytułu z TMDB — użyto tytułu z nazwy release'u (bez polskich znaków)"
+   ],
+   "error": null
+  },
+  {
+   "release": "Example.Film.2019.MULTi.1080p.REMUX.BluRay.AVC.TrueHD.Atmos.7.1-GRP",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "nazwa nie konczy sie na -Zulea"
+  },
+  {
+   "release": "Example..Film.2019.MULTi.1080p.REMUX.BluRay.AVC.TrueHD.Atmos.7.1-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "pusty element nazwy"
+  },
+  {
+   "release": "Example.Film.2019.MULTi.1080p.BluRay.AVC.TrueHD.Atmos.7.1-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "brak REMUX"
+  },
+  {
+   "release": "Example.Film.2019.MULTi.1080p.REMUX.WEB.AVC.TrueHD.Atmos.7.1-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "po REMUX oczekiwane BluRay"
+  },
+  {
+   "release": "Example.Film.2019.MULTi.1080p.REMUX-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "po REMUX oczekiwane BluRay"
+  },
+  {
+   "release": "Example.Film.2019.MULTi.1080p.UHD.REMUX.BluRay.AVC.TrueHD.Atmos.7.1-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "UHD przy rozdzielczosci innej niz 2160p"
+  },
+  {
+   "release": "Example.Film.2019.MULTi.REMUX.BluRay.AVC.TrueHD.Atmos.7.1-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "brak rozdzielczosci przed REMUX"
+  },
+  {
+   "release": "Film.MULTi.1080p.REMUX.BluRay.AVC.TrueHD.Atmos.7.1-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "brak tytulu albo roku"
+  },
+  {
+   "release": "2019.MULTi.1080p.REMUX.BluRay.AVC.TrueHD.Atmos.7.1-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "brak tytulu albo roku"
+  },
+  {
+   "release": "Example.Film.2019.PL.MULTi.1080p.REMUX.BluRay.AVC.TrueHD.Atmos.7.1-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "wiecej niz jeden znacznik jezyka"
+  },
+  {
+   "release": "Example.Film.2019.MULTi.2160p.UHD.REMUX.BluRay.HDR.DV.HEVC.TrueHD.Atmos.7.1-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "niepoprawna kolejnosc albo powtorzenie DV/HDR"
+  },
+  {
+   "release": "Example.Film.2019.MULTi.2160p.UHD.REMUX.BluRay.DV.DV.HEVC.TrueHD.Atmos.7.1-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "niepoprawna kolejnosc albo powtorzenie DV/HDR"
+  },
+  {
+   "release": "Example.Film.2019.MULTi.1080p.REMUX.BluRay.H264.TrueHD.Atmos.7.1-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "nieznany kodek wideo"
+  },
+  {
+   "release": "Example.Film.2019.MULTi.1080p.REMUX.BluRay.AVC.TrueHD.Atmos-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "brak ukladu kanalow audio (np. 5.1)"
+  },
+  {
+   "release": "Example.Film.2019.MULTi.1080p.REMUX.BluRay.AVC.7.1-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "brak ukladu kanalow audio (np. 5.1)"
+  },
+  {
+   "release": "Example.Film.2019.MULTi.1080p.REMUX.BluRay.AVC.OPUS.7.1-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "nieznany kodek audio: OPUS"
+  },
+  {
+   "release": "Example.Film.2019.MULTi.1080p.REMUX.BluRay.AVC.TrueHD.Atmos.71-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "brak ukladu kanalow audio (np. 5.1)"
+  },
+  {
+   "release": "Example.Film.2019.MULTi.1080p.REMUX.BluRay.REMUX.BluRay.AVC.DTS.5.1-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "nieznany kodek wideo"
+  },
+  {
+   "release": "",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "nazwa nie konczy sie na -Zulea"
+  },
+  {
+   "release": "-Zulea",
+   "record": null,
+   "cinemamovies": null,
+   "ptt": null,
+   "warnings": [],
+   "error": "pusty element nazwy"
+  }
+ ]
+}
