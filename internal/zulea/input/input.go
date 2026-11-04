@@ -91,6 +91,8 @@ type Sources struct {
 	TitlesPath   string
 	ManifestPath string
 	TorrentDir   string
+	// Disk is the W-2 physical disk check (freeze physical_N5_disk vs file location).
+	Disk freeze.DiskCheck
 }
 
 // Reader opens files for the adapter. The default reads the local filesystem;
@@ -154,6 +156,9 @@ func OpenWithReader(sources Sources, reader Reader) (*Adapter, error) {
 		if strings.TrimSpace(value) == "" {
 			return nil, fmt.Errorf("zulea: %s path is required", name)
 		}
+	}
+	if err := sources.Disk.Validate(); err != nil {
+		return nil, fmt.Errorf("zulea: %w", err)
 	}
 	frozen, err := freeze.Load(sources.FreezePath, sources.FreezeSHA256)
 	if err != nil {
@@ -255,6 +260,9 @@ func (a *Adapter) Prepare(release string, profile Profile) (*Prepared, error) {
 	}
 	mkvPath := filepath.Join(dir, release+".mkv")
 	nfoPath := filepath.Join(dir, release+".nfo")
+	if err := a.sources.Disk.Verify(rec, mkvPath); err != nil {
+		return nil, wrapStop(err)
+	}
 	mkvID, err := freeze.VerifyMKV(rec, mkvPath)
 	if err != nil {
 		return nil, wrapStop(err)

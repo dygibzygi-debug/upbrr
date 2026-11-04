@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/autobrr/upbrr/internal/zulea/freeze"
 	"github.com/autobrr/upbrr/internal/zulea/names"
 	"github.com/autobrr/upbrr/internal/zulea/zuleatest"
 )
@@ -37,6 +38,7 @@ func sources(env *zuleatest.Env) Sources {
 		TitlesPath:   env.TitlesPath,
 		ManifestPath: env.ManifestPath,
 		TorrentDir:   env.TorrentDir,
+		Disk:         env.DiskCheck(),
 	}
 }
 
@@ -235,5 +237,56 @@ func TestNewProfileNeedsNoAdapterChange(t *testing.T) {
 	}
 	if _, ok := ProfileByTracker("CM"); ok {
 		t.Fatal("CinemaMovies is deferred and must not be enabled")
+	}
+}
+
+// TestPrepareStopsOnPhysicalDisk covers W-2: the freeze physical_N5_disk must
+// equal the configured disk and the file must really live on it.
+func TestPrepareStopsOnPhysicalDisk(t *testing.T) {
+	cases := map[string]func(env *zuleatest.Env) freeze.DiskCheck{
+		"freeze names other disk": func(env *zuleatest.Env) freeze.DiskCheck {
+			return freeze.DiskCheck{
+				Disk:      "disk2",
+				Mode:      freeze.DiskModePath,
+				MountBase: env.MountBase,
+			}
+		},
+		"library outside disk path": func(env *zuleatest.Env) freeze.DiskCheck {
+			return freeze.DiskCheck{
+				Disk:      zuleatest.Disk,
+				Mode:      freeze.DiskModePath,
+				MountBase: filepath.Join(env.Root, "elsewhere"),
+			}
+		},
+		"xattr unavailable fails closed": func(_ *zuleatest.Env) freeze.DiskCheck {
+			return freeze.DiskCheck{Disk: zuleatest.Disk, Mode: freeze.DiskModeUnraidXattr}
+		},
+	}
+	for name, check := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := zuleatest.New(t, zuleatest.Options{})
+			src := sources(env)
+			src.Disk = check(env)
+			adapter, err := Open(src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = adapter.Prepare(zuleatest.Release, PTT)
+			if !errors.Is(err, ErrStop) {
+				t.Fatalf("expected STOP, got %v", err)
+			}
+			t.Logf("stop reason: %v", err)
+		})
+	}
+}
+
+func TestOpenRejectsInvalidDiskCheck(t *testing.T) {
+	env := zuleatest.New(t, zuleatest.Options{})
+	for _, check := range []freeze.DiskCheck{{}, {Disk: "disk1"}, {Disk: "../x", Mode: freeze.DiskModePath}, {Disk: "disk1", Mode: "none"}} {
+		src := sources(env)
+		src.Disk = check
+		if _, err := Open(src); err == nil {
+			t.Errorf("%+v: expected error", check)
+		}
 	}
 }

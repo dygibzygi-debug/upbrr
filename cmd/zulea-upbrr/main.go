@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -148,8 +149,14 @@ func runCheckConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "zulea-upbrr check-config: %v\n", err)
 		return exitUsage
 	}
-	fmt.Fprintf(stdout, "konfiguracja poprawna; trackery: %s; PTT ID potwierdzone: %t\n",
-		strings.Join(cfg.Trackers, ","), cfg.PTT.Taxonomy != nil)
+	personal := "nierozstrzygnięte"
+	if cfg.PTT.PersonalRelease != nil {
+		personal = strconv.FormatBool(*cfg.PTT.PersonalRelease)
+	}
+	fmt.Fprintf(stdout, "konfiguracja poprawna\n  trackery: %s\n  dysk (W-2): %s, tryb %s\n  MediaInfo (D-6): %s\n"+
+		"  ID PTT potwierdzone (W-1): %t\n  personal_release (D-5): %s\n  mod_queue (D-5): %t\n",
+		strings.Join(cfg.Trackers, ","), cfg.PhysicalDisk, cfg.DiskCheckMode, cfg.MediaInfo.Source,
+		cfg.PTT.Taxonomy != nil, personal, cfg.PTT.ModQueue)
 	return exitOK
 }
 

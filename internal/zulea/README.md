@@ -17,7 +17,9 @@ continues:
    - SHA-256 of the freeze file equals the configured value;
    - exact 9-column header;
    - exactly one record for the release, with status `OK`;
-   - MKV `stat` identity (inode, size, mtime seconds) equals the freeze.
+   - MKV `stat` identity (inode, size, mtime seconds) equals the freeze;
+   - `physical_N5_disk` equals the configured `physical_disk`, and the file
+     really lives there (W-2, as in the TM wrapper). See "Disk check".
 2. **Release directory** (`internal/zulea/input`):
    - a real directory, not a symlink;
    - exactly one `.mkv` and one `.nfo`;
@@ -57,6 +59,18 @@ continues:
    - `tmdb` is the frozen id;
    - MediaInfo is present and BDInfo is empty.
 
+9. **Duplicates** (`internal/zulea/pttdupe`): the unchanged upbrr duplicate
+   service searches PTT (`/api/torrents/filter` by TMDB id, read only) and
+   evaluates every candidate:
+
+   | Status | Meaning |
+   |---|---|
+   | `CLEAR` | complete search, no duplicate, nothing to review |
+   | `DUPLICATE` | a candidate occupies the same slot; the release is a STOP |
+   | `REVIEW` | an incomplete search, a tracker error or candidates needing judgement; blocks the canary |
+   | `NOT_RUN` | no API key; blocks the canary |
+   | `FAILED` | the search failed; blocks the canary |
+
 The adapter never opens `<REL>.screens.json`. Screenshot links come only
 from the description.
 
@@ -93,12 +107,15 @@ The config is JSON, mode `0600`, and unknown fields are rejected. It holds
   "tm_output_dir": "/srv/tm/output/<run-id>",
   "work_dir": "/srv/zulea-upbrr/work",
   "tmdb_key_file": "/srv/zulea-upbrr/secrets/tmdb.key",
+  "physical_disk": "disk1",
+  "disk_check_mode": "path",
+  "mediainfo": {"source": "cli", "binary": "/usr/bin/mediainfo"},
   "trackers": ["PTT"],
   "ptt": {
     "api_key_file": "/srv/zulea-upbrr/secrets/ptt.key",
     "anonymous": false,
-    "personal_release": false,
-    "mod_queue": false,
+    "personal_release": null,
+    "mod_queue": true,
     "taxonomy": {
       "category": {"MOVIE": "<id>"},
       "type": {"REMUX": "<id>"},
@@ -115,6 +132,47 @@ The config is JSON, mode `0600`, and unknown fields are rejected. It holds
   Once set, any mismatch is a STOP.
 - `api_key_file` is optional for dry-run. The key is never transmitted in
   dry-run.
+
+### Disk check (W-2)
+
+`disk_check_mode` is required. There are two modes:
+
+- **`path`**: the MKV must be read from `/mnt/<physical_disk>/...`. This is the
+  same array-disk path the TM wrapper uses (`SOURCE_ROOT=/mnt/<disk>/...`).
+- **`unraid_xattr`**: reads Unraid's `system.LOCATION` attribute of a
+  `/mnt/user/...` file. Where the attribute is unavailable, the check fails
+  closed (STOP).
+
+Deployment note: the freeze records `MKV_INO` as seen by the TM wrapper,
+which reads the array-disk path. Through the user-share FUSE layer the
+reported inode can differ. Verify the identity check on one release before
+choosing the mount (`zulea-upbrr plan` gives a STOP with the
+"ino/size/mtime" reason if it differs). The uploader only reads. Mount the
+library read only through exactly one path.
+
+### MediaInfo (D-6)
+
+`mediainfo.source` is required:
+
+- **`cli`** runs the MediaInfo binary (only reads the MKV). It writes the
+  text to `work_dir/mediainfo/`, mode `0600`, with `Complete name` reduced
+  to the file name.
+- **`file`** reads a ready `<dir>/<REL>.mediainfo.txt` (outside the
+  library). It must already name only the MKV file.
+- **`upbrr`** uses go-mediainfo. The canary gate rejects it.
+
+### Canary gate
+
+Every report includes `canary.ready` and the list of blockers. The gate is
+open only when all of these hold:
+
+- the PTT IDs are confirmed (W-1);
+- an API key is present;
+- the duplicate check is `CLEAR`;
+- `personal_release` is decided (not `null`) and `mod_queue` is `true` (D-5);
+- MediaInfo is `cli` or `file` (D-6).
+
+The gate never uploads. A real upload stays a separate, human-confirmed step.
 
 ## Usage
 

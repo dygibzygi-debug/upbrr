@@ -25,6 +25,9 @@ import (
 // Release is the synthetic release used by the fixture.
 const Release = "Example.Film.2019.MULTi.1080p.REMUX.BluRay.AVC.TrueHD.Atmos.7.1-Zulea"
 
+// Disk is the synthetic array disk recorded in the freeze.
+const Disk = "disk1"
+
 // TMDBID is the synthetic TMDB identifier recorded in the freeze.
 const TMDBID = "100001"
 
@@ -43,6 +46,7 @@ const Description = "[center][b]Example Film[/b][/center]\n\n[b]SCREENY[/b]\n" +
 // Env is a generated environment.
 type Env struct {
 	Root         string
+	MountBase    string
 	LibraryRoot  string
 	ReleaseDir   string
 	MKVPath      string
@@ -131,7 +135,8 @@ func New(t *testing.T, opts Options) *Env {
 	root := t.TempDir()
 	env := &Env{
 		Root:        root,
-		LibraryRoot: filepath.Join(root, "library"),
+		MountBase:   filepath.Join(root, "mnt"),
+		LibraryRoot: filepath.Join(root, "mnt", Disk, "Remuxy"),
 		TorrentDir:  filepath.Join(root, "tm-output", "run-1"),
 	}
 	env.ReleaseDir = filepath.Join(env.LibraryRoot, Release)
@@ -148,7 +153,7 @@ func New(t *testing.T, opts Options) *Env {
 
 	ino, size, mtime := statTriple(t, env.MKVPath)
 	freezeBody := "SOURCE_ID\tphysical_N5_disk\tRELEASE\taudio_state\tstatus\tMKV_INO\tMKV_SIZE\tMKV_MTIME\tTMDB_ID\n" +
-		strings.Join([]string{"Synthetic.Source", "disk1", Release, "eng,pol", "OK", ino, size, mtime, TMDBID}, "\t") + "\n"
+		strings.Join([]string{"Synthetic.Source", Disk, Release, "eng,pol", "OK", ino, size, mtime, TMDBID}, "\t") + "\n"
 	env.FreezePath = filepath.Join(root, "freeze", "zulea-frozen-names-20261104-000000.tsv")
 	write(t, env.FreezePath, []byte(freezeBody), 0o400)
 	freezeSum := sha256.Sum256([]byte(freezeBody))
@@ -203,4 +208,13 @@ func New(t *testing.T, opts Options) *Env {
 	env.ManifestPath = filepath.Join(root, "runs", "run-1", "manifest-20261104-000000.tsv")
 	write(t, env.ManifestPath, []byte(manifest), 0o600)
 	return env
+}
+
+// DiskCheck returns the W-2 disk check matching the fixture layout.
+func (e *Env) DiskCheck() freeze.DiskCheck {
+	return freeze.DiskCheck{
+		Disk:      Disk,
+		Mode:      freeze.DiskModePath,
+		MountBase: e.MountBase,
+	}
 }

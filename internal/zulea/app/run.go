@@ -17,6 +17,7 @@ import (
 
 	"github.com/autobrr/upbrr/internal/redaction"
 	"github.com/autobrr/upbrr/internal/zulea/input"
+	"github.com/autobrr/upbrr/internal/zulea/pttdupe"
 	"github.com/autobrr/upbrr/internal/zulea/pttplan"
 	"github.com/autobrr/upbrr/internal/zulea/tmdb"
 	"github.com/autobrr/upbrr/pkg/api"
@@ -29,9 +30,20 @@ type Outcome struct {
 	Status  string        `json:"status"` // READY or STOP
 	Reason  string        `json:"reason,omitempty"`
 	Plan    *pttplan.Plan `json:"plan,omitempty"`
+	// Dupe is the PTT duplicate-check result (nil when the plan stopped earlier).
+	Dupe *pttdupe.Result `json:"dupe,omitempty"`
+	// Canary lists what still blocks a first real upload; empty means ready.
+	Canary CanaryGate `json:"canary"`
 	// Description is the exact description text upbrr would send.
 	Description string `json:"description,omitempty"`
 	ReportPath  string `json:"report_path,omitempty"`
+}
+
+// CanaryGate reports readiness for a first, human-confirmed upload (stage 3).
+// It never authorizes an upload by itself.
+type CanaryGate struct {
+	Ready    bool     `json:"ready"`
+	Blockers []string `json:"blockers"`
 }
 
 // Statuses.
@@ -124,6 +136,75 @@ type Runner struct {
 	Movies pttplan.MovieSource
 	// MediaInfo overrides the MediaInfo source (tests).
 	MediaInfo pttplan.MediaInfoSource
+	// SkipDupe disables the duplicate check (tests of unrelated behavior).
+	SkipDupe bool
+}
+
+// movieCache performs at most one TMDB request per frozen id per run.
+type movieCache struct {
+	source pttplan.MovieSource
+	mu     sync.Mutex
+	movies map[string]tmdb.Movie
+}
+
+func (c *movieCache) Movie(ctx context.Context, id string) (tmdb.Movie, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if movie, ok := c.movies[id]; ok {
+		return movie, nil
+	}
+	movie, err := c.source.Movie(ctx, id)
+	if err != nil {
+		return tmdb.Movie{}, fmt.Errorf("tmdb movie %s: %w", id, err)
+	}
+	c.movies[id] = movie
+	return movie, nil
+}
+
+func (r *Runner) mediaInfoSource(logger *Logger) pttplan.MediaInfoSource {
+	if r.MediaInfo != nil {
+		return r.MediaInfo
+	}
+	switch r.Config.MediaInfo.Source {
+	case MediaInfoCLI:
+		return pttplan.CLIMediaInfo{Binary: r.Config.MediaInfo.Binary, OutputDir: filepath.Join(r.Config.WorkDir, "mediainfo")}
+	case MediaInfoFile:
+		return pttplan.FileMediaInfo{Dir: r.Config.MediaInfo.Dir}
+	default:
+		return pttplan.UpbrrMediaInfo{TempRoot: filepath.Join(r.Config.WorkDir, "mediainfo"), Logger: logger}
+	}
+}
+
+// canaryGate lists every unmet stage-3 precondition from the review (W-1, D-5, D-6).
+func (r *Runner) canaryGate(plan *pttplan.Plan, dupeResult *pttdupe.Result, apiKey string) CanaryGate {
+	var blockers []string
+	if plan == nil {
+		blockers = append(blockers, "plan zatrzymany (STOP)")
+	} else if !plan.TaxonomyConfirmed {
+		blockers = append(blockers, "W-1: ID kategorii/rodzaju/rozdzielczości PTT niepotwierdzone (ptt.taxonomy)")
+	}
+	if apiKey == "" {
+		blockers = append(blockers, "brak klucza API PTT (ptt.api_key_file)")
+	}
+	switch {
+	case dupeResult == nil:
+		blockers = append(blockers, "duplikaty niesprawdzone")
+	case dupeResult.Status != pttdupe.StatusClear:
+		blockers = append(blockers, "duplikaty: "+dupeResult.Status+" — "+dupeResult.Message)
+	}
+	if r.Config.PTT.PersonalRelease == nil {
+		blockers = append(blockers, "D-5: ptt.personal_release nierozstrzygnięte (sprawdź regulamin PTT)")
+	}
+	if !r.Config.PTT.ModQueue {
+		blockers = append(blockers, "D-5: canary wymaga ptt.mod_queue=true")
+	}
+	if r.MediaInfo == nil && r.Config.MediaInfo.Source == MediaInfoUpbrr {
+		blockers = append(blockers, "D-6: canary wymaga MediaInfo z CLI (mediainfo.source=cli lub file)")
+	}
+	if blockers == nil {
+		blockers = []string{}
+	}
+	return CanaryGate{Ready: len(blockers) == 0, Blockers: blockers}
 }
 
 // DryRun prepares and plans every release for PTT. A failure of one release
@@ -152,6 +233,7 @@ func (r *Runner) DryRun(ctx context.Context, releases []string) ([]Outcome, erro
 		}
 		movies = client
 	}
+	movies = &movieCache{source: movies, movies: map[string]tmdb.Movie{}}
 	apiKey := ""
 	if r.Config.PTT.APIKeyFile != "" {
 		key, err := readKeyFile(r.Config.PTT.APIKeyFile)
@@ -161,10 +243,7 @@ func (r *Runner) DryRun(ctx context.Context, releases []string) ([]Outcome, erro
 		logger.AddSecret(key)
 		apiKey = key
 	}
-	mediaInfo := r.MediaInfo
-	if mediaInfo == nil {
-		mediaInfo = pttplan.UpbrrMediaInfo{TempRoot: filepath.Join(r.Config.WorkDir, "mediainfo"), Logger: logger}
-	}
+	mediaInfo := r.mediaInfoSource(logger)
 	adapter, err := input.Open(input.Sources{
 		LibraryRoot:  r.Config.LibraryRoot,
 		FreezePath:   r.Config.FreezePath,
@@ -172,6 +251,7 @@ func (r *Runner) DryRun(ctx context.Context, releases []string) ([]Outcome, erro
 		TitlesPath:   r.Config.TitlesPath,
 		ManifestPath: r.Config.ManifestPath,
 		TorrentDir:   r.Config.TMOutputDir,
+		Disk:         r.Config.DiskCheck(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("zulea: open inputs: %w", err)
@@ -194,7 +274,7 @@ func (r *Runner) DryRun(ctx context.Context, releases []string) ([]Outcome, erro
 				WorkDir:         r.Config.WorkDir,
 				APIKey:          apiKey,
 				Anonymous:       r.Config.PTT.Anonymous,
-				PersonalRelease: r.Config.PTT.PersonalRelease,
+				PersonalRelease: r.Config.PTT.PersonalRelease != nil && *r.Config.PTT.PersonalRelease,
 				ModQueue:        r.Config.PTT.ModQueue,
 				Taxonomy:        r.Config.PTT.Taxonomy,
 				Movies:          movies,
@@ -205,7 +285,34 @@ func (r *Runner) DryRun(ctx context.Context, releases []string) ([]Outcome, erro
 				outcome.Status = StatusReady
 				outcome.Plan = plan
 				outcome.Description = plan.Description
+				if !r.SkipDupe {
+					movie, merr := movies.Movie(ctx, prepared.Record.TMDBID)
+					if merr != nil {
+						err = fmt.Errorf("zulea: TMDB for duplicate check: %w", merr)
+					} else {
+						result, derr := pttdupe.Check(ctx, prepared, movie, pttdupe.Options{
+							APIKey:  apiKey,
+							WorkDir: r.Config.WorkDir,
+							Logger:  logger,
+						})
+						if derr != nil {
+							err = derr
+						} else {
+							outcome.Dupe = &result
+							if result.Status == pttdupe.StatusDuplicate {
+								err = errors.New("zulea: STOP: duplicate on PTT: " + result.Message)
+							}
+						}
+					}
+					if err != nil {
+						outcome.Status = StatusStop
+					}
+				}
 			}
+		}
+		outcome.Canary = r.canaryGate(outcome.Plan, outcome.Dupe, apiKey)
+		if outcome.Status != StatusReady {
+			outcome.Canary = r.canaryGate(nil, outcome.Dupe, apiKey)
 		}
 		if err != nil {
 			outcome.Reason = logger.MaskKnown(err.Error())
@@ -265,6 +372,9 @@ func render(w io.Writer, outcomes []Outcome) {
 		fmt.Fprintf(w, "\n=== %s — %s — %s\n", o.Tracker, o.Release, o.Status)
 		if o.Status != StatusReady {
 			fmt.Fprintf(w, "POWÓD: %s\n", o.Reason)
+			if o.Dupe != nil {
+				renderDupe(w, o.Dupe)
+			}
 			if o.ReportPath != "" {
 				fmt.Fprintf(w, "raport: %s\n", o.ReportPath)
 			}
@@ -292,6 +402,7 @@ func render(w io.Writer, outcomes []Outcome) {
 		}
 		fmt.Fprintf(w, "infohash: %s (TM: %s)\n", p.InfoHash, p.TMInfoHash)
 		fmt.Fprintf(w, "ID PTT potwierdzone: %t\n", p.TaxonomyConfirmed)
+		renderDupe(w, o.Dupe)
 		for _, warning := range p.Warnings {
 			fmt.Fprintf(w, "UWAGA: %s\n", warning)
 		}
@@ -300,6 +411,33 @@ func render(w io.Writer, outcomes []Outcome) {
 		fmt.Fprintln(w, o.Description)
 		fmt.Fprintln(w, "-----8<-----")
 		fmt.Fprintf(w, "fingerprint: %s\nraport: %s\n", p.Fingerprint, o.ReportPath)
+		renderCanary(w, o.Canary)
 	}
 	fmt.Fprintf(w, "\nPODSUMOWANIE: READY=%d STOP=%d. Tryb wyłącznie dry-run: nic nie zostało wysłane.\n", ready, len(outcomes)-ready)
+}
+
+func renderDupe(w io.Writer, d *pttdupe.Result) {
+	if d == nil {
+		fmt.Fprintln(w, "duplikaty PTT: nie sprawdzano")
+		return
+	}
+	fmt.Fprintf(w, "duplikaty PTT: %s — %s (stron: %d, kandydatów: %d, wyszukiwanie kompletne: %t)\n",
+		d.Status, d.Message, d.Pages, d.CandidateCount, d.SearchComplete)
+	for _, c := range d.Candidates {
+		fmt.Fprintf(w, "  [%s] %s (%s %s) %s\n", c.Relation, c.Name, c.Type, c.Resolution, c.Link)
+	}
+	for _, reason := range d.ReviewReasons {
+		fmt.Fprintf(w, "  do oceny: %s\n", reason)
+	}
+}
+
+func renderCanary(w io.Writer, gate CanaryGate) {
+	if gate.Ready {
+		fmt.Fprintln(w, "gotowość do canary: TAK (upload nadal wymaga osobnego potwierdzenia Andryou)")
+		return
+	}
+	fmt.Fprintln(w, "gotowość do canary: NIE")
+	for _, b := range gate.Blockers {
+		fmt.Fprintf(w, "  bloker: %s\n", b)
+	}
 }

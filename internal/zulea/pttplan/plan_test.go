@@ -74,6 +74,7 @@ func prepared(t *testing.T, env *zuleatest.Env) *input.Prepared {
 		TitlesPath:   env.TitlesPath,
 		ManifestPath: env.ManifestPath,
 		TorrentDir:   env.TorrentDir,
+		Disk:         env.DiskCheck(),
 	})
 	if err != nil {
 		t.Fatal(err)

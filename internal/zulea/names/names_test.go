@@ -200,3 +200,33 @@ func TestLatinTableVersion(t *testing.T) {
 		t.Fatal("latin letter table is empty")
 	}
 }
+
+// TestFixturesAreSynthetic guards W-4: every release name in the committed
+// cases starts with an approved synthetic token, so real release names cannot
+// slip into the public repository.
+func TestFixturesAreSynthetic(t *testing.T) {
+	var cases struct {
+		Cases []struct {
+			Release string `json:"release"`
+		} `json:"cases"`
+	}
+	loadJSON(t, filepath.Join("testdata", "cases.json"), &cases)
+	allowed := map[string]bool{
+		"Example": true,
+		"Polski":  true,
+		"4242":    true,
+		"Film":    true,
+		"2019":    true,
+		"":        true,
+		"-Zulea":  true,
+	}
+	for _, c := range cases.Cases {
+		first := strings.SplitN(c.Release, ".", 2)[0]
+		if !allowed[first] {
+			t.Errorf("release %q is not an approved synthetic name", c.Release)
+		}
+		if strings.HasPrefix(c.Release, "Polski.") && !strings.HasPrefix(c.Release, "Polski.Przyklad.") {
+			t.Errorf("release %q is not an approved synthetic name", c.Release)
+		}
+	}
+}

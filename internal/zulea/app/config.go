@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/autobrr/upbrr/internal/pathing"
+	"github.com/autobrr/upbrr/internal/zulea/freeze"
 	"github.com/autobrr/upbrr/internal/zulea/pttplan"
 )
 
@@ -33,19 +34,55 @@ type Config struct {
 	TMDBKeyFile string `json:"tmdb_key_file"`
 	// TMDBBaseURL overrides the TMDB API root (tests only); empty uses the public API.
 	TMDBBaseURL string `json:"tmdb_base_url,omitempty"`
+	// PhysicalDisk is the array disk every freeze record must name (W-2), e.g. "disk1".
+	PhysicalDisk string `json:"physical_disk"`
+	// DiskCheckMode is "path" (library read via /mnt/<disk>/...) or "unraid_xattr".
+	DiskCheckMode string `json:"disk_check_mode"`
+	// MountBase overrides the /mnt array mount root (tests only).
+	MountBase string          `json:"mount_base,omitempty"`
+	MediaInfo MediaInfoConfig `json:"mediainfo"`
 	// Trackers lists enabled trackers. Stage 1 supports only "PTT"; empty means none.
 	Trackers []string  `json:"trackers"`
 	PTT      PTTConfig `json:"ptt"`
 }
 
+// MediaInfo sources (decision D-6).
+const (
+	MediaInfoCLI   = "cli"
+	MediaInfoFile  = "file"
+	MediaInfoUpbrr = "upbrr"
+)
+
+// MediaInfoConfig selects the MediaInfo text source.
+type MediaInfoConfig struct {
+	// Source is "cli" (run the MediaInfo binary), "file" (ready <REL>.mediainfo.txt
+	// in Dir) or "upbrr" (go-mediainfo).
+	Source string `json:"source"`
+	// Binary is the mediainfo executable for "cli".
+	Binary string `json:"binary,omitempty"`
+	// Dir holds ready reports for "file"; it must be outside the library.
+	Dir string `json:"dir,omitempty"`
+}
+
+// DiskCheck returns the W-2 physical disk check.
+func (c Config) DiskCheck() freeze.DiskCheck {
+	return freeze.DiskCheck{
+		Disk:      c.PhysicalDisk,
+		Mode:      c.DiskCheckMode,
+		MountBase: c.MountBase,
+	}
+}
+
 // PTTConfig holds PTT form choices.
 type PTTConfig struct {
 	// APIKeyFile holds the PTT API key (mode 0600). Optional for dry-run.
-	APIKeyFile      string            `json:"api_key_file,omitempty"`
-	Anonymous       bool              `json:"anonymous"`
-	PersonalRelease bool              `json:"personal_release"`
-	ModQueue        bool              `json:"mod_queue"`
-	Taxonomy        *pttplan.Taxonomy `json:"taxonomy,omitempty"`
+	APIKeyFile string `json:"api_key_file,omitempty"`
+	Anonymous  bool   `json:"anonymous"`
+	// PersonalRelease must be decided explicitly (D-5); null blocks canary readiness.
+	PersonalRelease *bool `json:"personal_release"`
+	// ModQueue opts into the moderation queue; required true for the canary (D-5).
+	ModQueue bool              `json:"mod_queue"`
+	Taxonomy *pttplan.Taxonomy `json:"taxonomy,omitempty"`
 }
 
 // LoadConfig reads a JSON config file that must be private (0600 or stricter)
@@ -108,6 +145,22 @@ func (c Config) Validate() error {
 	}
 	if c.PTTEnabled() && strings.TrimSpace(c.TMDBKeyFile) == "" {
 		return errors.New("config: tmdb_key_file is required for PTT (decision D-2)")
+	}
+	if err := c.DiskCheck().Validate(); err != nil {
+		return fmt.Errorf("config: physical_disk/disk_check_mode: %w", err)
+	}
+	switch c.MediaInfo.Source {
+	case MediaInfoCLI:
+		if strings.TrimSpace(c.MediaInfo.Binary) == "" {
+			return errors.New("config: mediainfo.binary is required for source \"cli\"")
+		}
+	case MediaInfoFile:
+		if !filepath.IsAbs(c.MediaInfo.Dir) || pathing.IsWithinRoot(c.LibraryRoot, c.MediaInfo.Dir) {
+			return errors.New("config: mediainfo.dir must be an absolute path outside the library")
+		}
+	case MediaInfoUpbrr:
+	default:
+		return errors.New("config: mediainfo.source must be \"cli\", \"file\" or \"upbrr\" (decision D-6)")
 	}
 	return nil
 }
