@@ -136,7 +136,7 @@ func New(t *testing.T, opts Options) *Env {
 	env := &Env{
 		Root:        root,
 		MountBase:   filepath.Join(root, "mnt"),
-		LibraryRoot: filepath.Join(root, "mnt", Disk, "Remuxy"),
+		LibraryRoot: filepath.Join(root, "mnt", Disk, "library"),
 		TorrentDir:  filepath.Join(root, "tm-output", "run-1"),
 	}
 	env.ReleaseDir = filepath.Join(env.LibraryRoot, Release)
