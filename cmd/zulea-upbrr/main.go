@@ -19,8 +19,11 @@ import (
 	"strings"
 	"syscall"
 
+	"golang.org/x/term"
+
 	"github.com/autobrr/upbrr/internal/zulea/app"
 	"github.com/autobrr/upbrr/internal/zulea/names"
+	"github.com/autobrr/upbrr/internal/zulea/tm"
 )
 
 const version = "0.1.0-stage1"
@@ -47,10 +50,13 @@ Użycie:
   zulea-upbrr plan --config FILE (--release REL ... | --list FILE) [--debug]
   zulea-upbrr check-config --config FILE
   zulea-upbrr names --titles FILE --tmdb-id ID REL
+  zulea-upbrr compare-torrent ORYGINAL_TM.torrent POBRANY.torrent
+  zulea-upbrr upload --config FILE --release REL --fingerprint FP   (canary: jedno wydanie, terminal, wpisanie potwierdzenia)
   zulea-upbrr version
 
 Kody wyjścia: 0 wszystko READY, 3 co najmniej jeden STOP, 2 błąd użycia/konfiguracji, 1 błąd wykonania.
-Wysyłki na tracker nie ma w tym etapie.
+Upload działa tylko interaktywnie w terminalu: świeży dry-run, zgodny fingerprint, otwarta bramka canary
+i ręcznie wpisana fraza potwierdzenia. Nie ma trybu bez pytania. Nic nie trafia do klienta torrent.
 `)
 }
 
@@ -74,8 +80,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "version":
 		fmt.Fprintf(stdout, "zulea-upbrr %s (names.py %s)\n", version, names.RuleVersion)
 		return exitOK
-	case "upload", "submit", "send":
-		fmt.Fprintln(stderr, "zulea-upbrr: wysyłka nie istnieje w etapie 1 (tylko dry-run). Upload uruchamia wyłącznie Andryou w etapie 3.")
+	case "upload":
+		return runUpload(ctx, args[1:], stdout, stderr, os.Stdin)
+	case "compare-torrent":
+		return runCompare(args[1:], stdout, stderr)
+	case "submit", "send":
+		fmt.Fprintln(stderr, "zulea-upbrr: nie ma tej komendy. Wysyłka: zulea-upbrr upload (tylko interaktywnie, po dry-run i potwierdzeniu fingerprintu).")
 		return exitUsage
 	case "-h", "--help", "help":
 		usage(stdout)
@@ -212,4 +222,91 @@ func readList(path string) ([]string, error) {
 		return nil, errors.New("lista: brak wydań")
 	}
 	return out, nil
+}
+
+// isTerminal reports whether f is an interactive terminal.
+var isTerminal = func(f *os.File) bool { return term.IsTerminal(int(f.Fd())) }
+
+func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer, stdin *os.File) int {
+	fs := flag.NewFlagSet("upload", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	configPath := fs.String("config", "", "plik konfiguracji JSON (0600)")
+	release := fs.String("release", "", "jedno wydanie (canary)")
+	fingerprint := fs.String("fingerprint", "", "pełny fingerprint przejrzanego dry-run (64 znaki)")
+	if err := fs.Parse(args); err != nil || *configPath == "" || *release == "" || *fingerprint == "" || fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "zulea-upbrr upload: wymagane --config, --release i --fingerprint")
+		return exitUsage
+	}
+	if !isTerminal(stdin) {
+		fmt.Fprintln(stderr, "zulea-upbrr upload: wymagany interaktywny terminal — potwierdzenia nie można podać przez potok ani plik")
+		return exitUsage
+	}
+	cfg, err := app.LoadConfig(*configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr upload: %v\n", err)
+		return exitUsage
+	}
+	logger := app.NewLogger(stderr, false)
+	runner := &app.Runner{Config: cfg, Logger: logger}
+	reader := bufio.NewReader(stdin)
+	result, err := runner.Upload(ctx, app.UploadRequest{
+		Release:     *release,
+		Fingerprint: *fingerprint,
+		Preview:     stdout,
+		Confirm: func(prompt string) (string, error) {
+			fmt.Fprint(stdout, prompt)
+			line, rerr := reader.ReadString('\n')
+			if rerr != nil && !errors.Is(rerr, io.EOF) {
+				return "", fmt.Errorf("read confirmation: %w", rerr)
+			}
+			return line, nil
+		},
+	})
+	if result.Comparison != nil {
+		fmt.Fprintln(stdout, logger.MaskKnown(result.Comparison.Report()))
+	}
+	if result.ReceiptPath != "" {
+		fmt.Fprintf(stdout, "pokwitowanie: %s (stan: %s)\n", result.ReceiptPath, result.Receipt.State)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr upload: %s\n", logger.Sanitize(err.Error()))
+		if errors.Is(err, app.ErrUploadRefused) {
+			return exitUsage
+		}
+		return exitRuntime
+	}
+	fmt.Fprintf(stdout, "WYSŁANO: %s (PTT id %s, %s)\n", *release, result.Receipt.TorrentID, result.Receipt.TorrentURL)
+	if result.Comparison == nil || !result.Comparison.OK() {
+		fmt.Fprintln(stdout, "UWAGA: brak potwierdzenia DANE_ZGODNE=TAK — nie dodawaj torrenta do klienta przed ręczną kontrolą")
+		return exitStop
+	}
+	fmt.Fprintf(stdout, "Następny krok (ręczny, jak dziś): dodaj %s do qBittorrenta z pełnym rechekiem; seed po 100%%.\n", result.Receipt.RegisteredTorrent)
+	return exitOK
+}
+
+func runCompare(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 2 {
+		fmt.Fprintln(stderr, "zulea-upbrr compare-torrent: wymagane dwa pliki: ORYGINAL_TM.torrent POBRANY.torrent")
+		return exitUsage
+	}
+	original, err := tm.ReadFile(args[0])
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr compare-torrent: %v\n", err)
+		return exitUsage
+	}
+	downloaded, err := tm.ReadFile(args[1])
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr compare-torrent: %v\n", err)
+		return exitUsage
+	}
+	comparison, err := tm.Compare(original, downloaded)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr compare-torrent: %v\n", err)
+		return exitRuntime
+	}
+	fmt.Fprint(stdout, comparison.Report())
+	if !comparison.OK() {
+		return exitRuntime
+	}
+	return exitOK
 }

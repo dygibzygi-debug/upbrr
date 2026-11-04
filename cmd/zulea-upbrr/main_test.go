@@ -10,15 +10,31 @@ import (
 	"testing"
 )
 
-func TestUploadCommandIsRefused(t *testing.T) {
-	for _, cmd := range []string{"upload", "submit", "send"} {
+func TestSubmitAliasesAreRefused(t *testing.T) {
+	for _, cmd := range []string{"submit", "send"} {
 		var out, errOut bytes.Buffer
 		if code := run(context.Background(), []string{cmd}, &out, &errOut); code != exitUsage {
 			t.Fatalf("%s: exit %d", cmd, code)
 		}
-		if !strings.Contains(errOut.String(), "tylko dry-run") {
-			t.Fatalf("%s: %q", cmd, errOut.String())
-		}
+	}
+}
+
+// TestUploadRequiresTerminal: piping a confirmation is impossible.
+func TestUploadRequiresTerminal(t *testing.T) {
+	var out, errOut bytes.Buffer
+	args := []string{"upload", "--config", "x.json", "--release", "R-Zulea", "--fingerprint", strings.Repeat("a", 64)}
+	if code := run(context.Background(), args, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "interaktywny terminal") {
+		t.Fatalf("exit %d err %q", code, errOut.String())
+	}
+	if code := run(context.Background(), []string{"upload"}, &out, &errOut); code != exitUsage {
+		t.Fatalf("missing flags exit %d", code)
+	}
+}
+
+func TestCompareTorrentCommand(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"compare-torrent", "only-one"}, &out, &errOut); code != exitUsage {
+		t.Fatalf("exit %d", code)
 	}
 }
 

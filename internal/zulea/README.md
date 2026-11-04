@@ -5,8 +5,8 @@ ready-made pipeline outputs (frozen name, NFO, description with screenshots,
 Torrent Maker torrent) and the upbrr PTT tracker definition. Nothing is
 recomputed and nothing in the library is written.
 
-**Stage 1 is dry-run only.** There is no upload command. `zulea-upbrr upload`
-refuses explicitly.
+**Dry-run by default.** A real upload exists only as the gated canary
+command (see "Upload"). It never touches a torrent client.
 
 ## Chain of evidence
 
@@ -182,6 +182,45 @@ zulea-upbrr plan --config /srv/zulea-upbrr/zulea.json --release <REL>
 zulea-upbrr plan --config /srv/zulea-upbrr/zulea.json --list releases.txt
 zulea-upbrr names --titles tmdb-titles.tsv --tmdb-id <ID> <REL>
 ```
+
+## Upload (canary, human-confirmed)
+
+```bash
+zulea-upbrr upload --config /srv/zulea-upbrr/zulea.json --release <REL> --fingerprint <64 hex from the reviewed dry-run>
+```
+
+Gates, in order (any failure: nothing is sent and no receipt is written):
+
+1. An interactive terminal is required. Piped or scripted confirmation is
+   refused.
+2. There is no earlier receipt in `work_dir/receipts/<REL>.ptt.json`, unless
+   that attempt is proven `not_sent`.
+3. A fresh dry-run (same code path) is READY and its canary gate is open.
+4. Its fingerprint equals `--fingerprint`.
+5. The human types `WYSYLAM <first 12 fingerprint characters>`.
+6. The upload-intent plan from upbrr reproduces the same fingerprint.
+
+The receipt is written **before** submission. After submission its state is
+one of the following, and no state other than `not_sent` is ever retried
+automatically:
+
+| State | Meaning |
+|---|---|
+| `accepted` | the tracker accepted the upload |
+| `rejected` | the tracker explicitly rejected it |
+| `not_sent` | proven not sent |
+| `uncertain` | the outcome is unknown; check PTT manually |
+
+On acceptance, upbrr downloads the registered torrent from PTT into
+`work_dir`. `zulea-upbrr` then compares it with the TM torrent, as
+`compare-torrent` does. Adding it to qBittorrent (full recheck, seed at 100%)
+stays the existing manual step.
+
+`zulea-upbrr compare-torrent TM.torrent DOWNLOADED.torrent` is a Go port of
+`porownaj-torrent-z-trackera.py`. Its verdict lines (`DANE_ZGODNE`,
+`NAZWY_ZGODNE`, `INFOHASH_ZMIENIONY_PRZEZ_TRACKER`, `PRIVATE`) are verified
+identical to the reference script on four scenarios. Exit code 0 only when
+`DANE_ZGODNE=TAK` and `PRIVATE=1`.
 
 Exit codes:
 

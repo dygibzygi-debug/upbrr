@@ -26,6 +26,8 @@ type decoder struct {
 	data  []byte
 	pos   int
 	depth int
+	// lenient accepts unsorted dictionary keys (torrents re-encoded by trackers).
+	lenient bool
 }
 
 var errBencode = errors.New("tm: invalid bencode")
@@ -38,7 +40,17 @@ func bdecodeErr(format string, args ...any) error {
 // Canonical means sorted unique dictionary keys and no leading zeros, so the
 // raw info span is exactly what a client hashes.
 func decodeStrict(data []byte) (value, error) {
-	d := &decoder{data: data}
+	return decode(data, false)
+}
+
+// decodeLenient decodes one value spanning all of data, accepting unsorted
+// (but still unique) dictionary keys.
+func decodeLenient(data []byte) (value, error) {
+	return decode(data, true)
+}
+
+func decode(data []byte, lenient bool) (value, error) {
+	d := &decoder{data: data, lenient: lenient}
 	v, err := d.value()
 	if err != nil {
 		return nil, err
@@ -161,8 +173,11 @@ func (d *decoder) dictionary() (value, error) {
 			return nil, err
 		}
 		key := string(k)
-		if len(out.keys) > 0 && key <= prev {
-			return nil, bdecodeErr("dictionary keys not sorted or duplicated at %q", key)
+		if _, dup := out.values[key]; dup {
+			return nil, bdecodeErr("duplicate dictionary key %q", key)
+		}
+		if !d.lenient && len(out.keys) > 0 && key <= prev {
+			return nil, bdecodeErr("dictionary keys not sorted at %q", key)
 		}
 		start := d.pos
 		v, err := d.value()

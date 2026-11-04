@@ -207,9 +207,16 @@ func (r *Runner) canaryGate(plan *pttplan.Plan, dupeResult *pttdupe.Result, apiK
 	return CanaryGate{Ready: len(blockers) == 0, Blockers: blockers}
 }
 
-// DryRun prepares and plans every release for PTT. A failure of one release
-// is a STOP for that release only; the others continue.
-func (r *Runner) DryRun(ctx context.Context, releases []string) ([]Outcome, error) {
+// session holds everything opened once per run: inputs, TMDB, keys, MediaInfo.
+type session struct {
+	logger    *Logger
+	adapter   *input.Adapter
+	movies    pttplan.MovieSource
+	apiKey    string
+	mediaInfo pttplan.MediaInfoSource
+}
+
+func (r *Runner) open(releases []string) (*session, error) {
 	if !r.Config.PTTEnabled() {
 		return nil, errors.New("no tracker enabled: add \"PTT\" to trackers in the config")
 	}
@@ -233,17 +240,16 @@ func (r *Runner) DryRun(ctx context.Context, releases []string) ([]Outcome, erro
 		}
 		movies = client
 	}
-	movies = &movieCache{source: movies, movies: map[string]tmdb.Movie{}}
-	apiKey := ""
+	sess := &session{logger: logger, movies: &movieCache{source: movies, movies: map[string]tmdb.Movie{}}}
 	if r.Config.PTT.APIKeyFile != "" {
 		key, err := readKeyFile(r.Config.PTT.APIKeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("ptt: %w", err)
 		}
 		logger.AddSecret(key)
-		apiKey = key
+		sess.apiKey = key
 	}
-	mediaInfo := r.mediaInfoSource(logger)
+	sess.mediaInfo = r.mediaInfoSource(logger)
 	adapter, err := input.Open(input.Sources{
 		LibraryRoot:  r.Config.LibraryRoot,
 		FreezePath:   r.Config.FreezePath,
@@ -256,70 +262,96 @@ func (r *Runner) DryRun(ctx context.Context, releases []string) ([]Outcome, erro
 	if err != nil {
 		return nil, fmt.Errorf("zulea: open inputs: %w", err)
 	}
-	logger.Evidencef("zulea: dry-run start trackers=PTT releases=%d freeze_sha256=%s", len(releases), adapter.Freeze().SHA256)
+	sess.adapter = adapter
+	return sess, nil
+}
+
+func (r *Runner) planOptions(sess *session) pttplan.Options {
+	return pttplan.Options{
+		WorkDir:         r.Config.WorkDir,
+		APIKey:          sess.apiKey,
+		Anonymous:       r.Config.PTT.Anonymous,
+		PersonalRelease: r.Config.PTT.PersonalRelease != nil && *r.Config.PTT.PersonalRelease,
+		ModQueue:        r.Config.PTT.ModQueue,
+		Taxonomy:        r.Config.PTT.Taxonomy,
+		Movies:          sess.movies,
+		MediaInfo:       sess.mediaInfo,
+		Logger:          sess.logger,
+	}
+}
+
+// evaluate runs the full dry-run for one release: inputs, plan, duplicates, gate.
+func (r *Runner) evaluate(ctx context.Context, sess *session, rel string) (Outcome, *input.Prepared) {
+	outcome := Outcome{
+		Release: rel,
+		Tracker: input.PTT.Tracker,
+		Status:  StatusStop,
+	}
+	prepared, err := sess.adapter.Prepare(rel, input.PTT)
+	if err == nil {
+		var plan *pttplan.Plan
+		plan, err = pttplan.Build(ctx, prepared, r.planOptions(sess))
+		if err == nil {
+			outcome.Status = StatusReady
+			outcome.Plan = plan
+			outcome.Description = plan.Description
+			if !r.SkipDupe {
+				err = r.checkDupes(ctx, sess, prepared, &outcome)
+				if err != nil {
+					outcome.Status = StatusStop
+				}
+			}
+		}
+	}
+	if outcome.Status == StatusReady {
+		outcome.Canary = r.canaryGate(outcome.Plan, outcome.Dupe, sess.apiKey)
+	} else {
+		outcome.Canary = r.canaryGate(nil, outcome.Dupe, sess.apiKey)
+	}
+	if err != nil {
+		outcome.Reason = sess.logger.MaskKnown(err.Error())
+		sess.logger.Warnf("zulea: tracker=PTT release=%s decision=stop reason=%s", rel, outcome.Reason)
+	} else {
+		sess.logger.Evidencef("zulea: tracker=PTT release=%s decision=ready infohash=%s fingerprint=%s canary_ready=%t",
+			rel, outcome.Plan.InfoHash, outcome.Plan.Fingerprint, outcome.Canary.Ready)
+	}
+	return outcome, prepared
+}
+
+func (r *Runner) checkDupes(ctx context.Context, sess *session, prepared *input.Prepared, outcome *Outcome) error {
+	movie, err := sess.movies.Movie(ctx, prepared.Record.TMDBID)
+	if err != nil {
+		return fmt.Errorf("zulea: TMDB for duplicate check: %w", err)
+	}
+	result, err := pttdupe.Check(ctx, prepared, movie, pttdupe.Options{
+		APIKey:  sess.apiKey,
+		WorkDir: r.Config.WorkDir,
+		Logger:  sess.logger,
+	})
+	if err != nil {
+		return fmt.Errorf("zulea: duplicate check: %w", err)
+	}
+	outcome.Dupe = &result
+	if result.Status == pttdupe.StatusDuplicate {
+		return errors.New("zulea: STOP: duplicate on PTT: " + result.Message)
+	}
+	return nil
+}
+
+// DryRun prepares and plans every release for PTT. A failure of one release
+// is a STOP for that release only; the others continue.
+func (r *Runner) DryRun(ctx context.Context, releases []string) ([]Outcome, error) {
+	sess, err := r.open(releases)
+	if err != nil {
+		return nil, err
+	}
+	sess.logger.Evidencef("zulea: dry-run start trackers=PTT releases=%d freeze_sha256=%s", len(releases), sess.adapter.Freeze().SHA256)
 	outcomes := make([]Outcome, 0, len(releases))
 	for _, rel := range releases {
 		if err := ctx.Err(); err != nil {
 			return outcomes, fmt.Errorf("zulea: dry-run canceled: %w", err)
 		}
-		outcome := Outcome{
-			Release: rel,
-			Tracker: input.PTT.Tracker,
-			Status:  StatusStop,
-		}
-		prepared, err := adapter.Prepare(rel, input.PTT)
-		if err == nil {
-			var plan *pttplan.Plan
-			plan, err = pttplan.Build(ctx, prepared, pttplan.Options{
-				WorkDir:         r.Config.WorkDir,
-				APIKey:          apiKey,
-				Anonymous:       r.Config.PTT.Anonymous,
-				PersonalRelease: r.Config.PTT.PersonalRelease != nil && *r.Config.PTT.PersonalRelease,
-				ModQueue:        r.Config.PTT.ModQueue,
-				Taxonomy:        r.Config.PTT.Taxonomy,
-				Movies:          movies,
-				MediaInfo:       mediaInfo,
-				Logger:          logger,
-			})
-			if err == nil {
-				outcome.Status = StatusReady
-				outcome.Plan = plan
-				outcome.Description = plan.Description
-				if !r.SkipDupe {
-					movie, merr := movies.Movie(ctx, prepared.Record.TMDBID)
-					if merr != nil {
-						err = fmt.Errorf("zulea: TMDB for duplicate check: %w", merr)
-					} else {
-						result, derr := pttdupe.Check(ctx, prepared, movie, pttdupe.Options{
-							APIKey:  apiKey,
-							WorkDir: r.Config.WorkDir,
-							Logger:  logger,
-						})
-						if derr != nil {
-							err = derr
-						} else {
-							outcome.Dupe = &result
-							if result.Status == pttdupe.StatusDuplicate {
-								err = errors.New("zulea: STOP: duplicate on PTT: " + result.Message)
-							}
-						}
-					}
-					if err != nil {
-						outcome.Status = StatusStop
-					}
-				}
-			}
-		}
-		outcome.Canary = r.canaryGate(outcome.Plan, outcome.Dupe, apiKey)
-		if outcome.Status != StatusReady {
-			outcome.Canary = r.canaryGate(nil, outcome.Dupe, apiKey)
-		}
-		if err != nil {
-			outcome.Reason = logger.MaskKnown(err.Error())
-			logger.Warnf("zulea: tracker=PTT release=%s decision=stop reason=%s", rel, outcome.Reason)
-		} else {
-			logger.Evidencef("zulea: tracker=PTT release=%s decision=ready infohash=%s fingerprint=%s", rel, outcome.Plan.InfoHash, outcome.Plan.Fingerprint)
-		}
+		outcome, _ := r.evaluate(ctx, sess, rel)
 		path, werr := r.writeReport(outcome)
 		if werr != nil {
 			return outcomes, werr

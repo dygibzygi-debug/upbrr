@@ -4,7 +4,16 @@ Scope: `internal/zulea/`, `cmd/zulea-upbrr/`, `scripts/zulea/`. Root and `intern
 
 ## Invariants
 
-- **Dry-run only (stage 1).** Plans use `trackers.PreparationIntentDryRun`. Do not add submit, upload or auto-confirm paths. Upload arrives only in a later, separately approved stage, and then always after a full preview and an explicit human confirmation bound to the plan fingerprint.
+- **Upload only through the gated canary path.** `zulea-upbrr upload` (`app.Runner.Upload`) is the only submit path. Keep every gate:
+  - an interactive terminal;
+  - no prior receipt, unless it is a proven `not_sent`;
+  - a fresh dry-run that is READY;
+  - an open canary gate;
+  - a fingerprint equal to the reviewed one;
+  - the typed phrase `WYSYLAM <12 hex>`;
+  - an upload-intent plan that reproduces the same fingerprint.
+
+  Never add flags, environment variables, batch modes or defaults that skip a gate. Never retry automatically after `attempted`, `uncertain`, `rejected` or `accepted`. Never inject into a torrent client.
 - **The library is read only.** Never write, rename, chmod or create files under `library_root`. Generated artifacts (upload torrent copy, MediaInfo, reports) go below `work_dir`, which must not overlap the library.
 - **Never open `<REL>.screens.json`.** It holds ImgBB delete URLs. Screenshot links come only from the ready description.
 - **The TM torrent is sent unchanged.** The upload copy keeps the TM `info` bytes verbatim (same infohash) and drops every top-level key. There is no fallback: a missing or non-conforming TM torrent is a STOP, never a reason to let upbrr build or personalize a torrent.

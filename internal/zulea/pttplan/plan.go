@@ -106,16 +106,63 @@ type Plan struct {
 // placeholderAPIKey is used only for dry-run when no key is configured.
 const placeholderAPIKey = "dry-run-no-key" //nolint:gosec // Not a credential: fixed marker that dry-run never transmits.
 
-// Build prepares the PTT dry-run for prepared.
+// Build prepares the PTT dry-run for prepared. The plan is built with
+// PreparationIntentDryRun and carries no submit function.
 func Build(ctx context.Context, prepared *input.Prepared, opts Options) (*Plan, error) {
+	out, plan, err := build(ctx, prepared, opts, trackers.PreparationIntentDryRun)
+	if err != nil {
+		return nil, err
+	}
+	_ = plan.Release()
+	return out, nil
+}
+
+// Upload is a prepared, not yet submitted PTT upload. It is produced only by
+// PrepareUpload after the upload-intent preview reproduced the confirmed
+// dry-run fingerprint exactly.
+type Upload struct {
+	plan trackers.TrackerPlan
+}
+
+// Submit sends the prepared payload once (upbrr consumes the plan on first call).
+func (u *Upload) Submit(ctx context.Context) (api.UploadSummary, error) {
+	summary, err := u.plan.Submit(ctx)
+	if err != nil {
+		return summary, fmt.Errorf("pttplan: submit: %w", err)
+	}
+	return summary, nil
+}
+
+// Release frees the prepared operation's resources.
+func (u *Upload) Release() { _ = u.plan.Release() }
+
+// PrepareUpload builds the upload-intent plan through the same path as Build
+// and returns it only when its fingerprint equals confirmedFingerprint.
+func PrepareUpload(ctx context.Context, prepared *input.Prepared, opts Options, confirmedFingerprint string) (*Plan, *Upload, error) {
+	if strings.TrimSpace(opts.APIKey) == "" {
+		return nil, nil, reject("upload requires the PTT API key")
+	}
+	out, plan, err := build(ctx, prepared, opts, trackers.PreparationIntentUpload)
+	if err != nil {
+		return nil, nil, err
+	}
+	if out.Fingerprint != strings.TrimSpace(confirmedFingerprint) {
+		_ = plan.Release()
+		return nil, nil, reject("upload plan fingerprint %s differs from the confirmed dry-run %s", out.Fingerprint, confirmedFingerprint)
+	}
+	return out, &Upload{plan: plan}, nil
+}
+
+func build(ctx context.Context, prepared *input.Prepared, opts Options, intent trackers.PreparationIntent) (*Plan, trackers.TrackerPlan, error) {
+	var none trackers.TrackerPlan
 	if prepared == nil || prepared.Profile.Tracker != input.PTT.Tracker {
-		return nil, reject("prepared inputs are not for PTT")
+		return nil, none, reject("prepared inputs are not for PTT")
 	}
 	if strings.TrimSpace(opts.WorkDir) == "" || opts.Movies == nil || opts.MediaInfo == nil {
-		return nil, reject("work directory, movie source and MediaInfo source are required")
+		return nil, none, reject("work directory, movie source and MediaInfo source are required")
 	}
 	if insideLibrary(prepared.Directory, opts.WorkDir) {
-		return nil, reject("work directory must be outside the release library")
+		return nil, none, reject("work directory must be outside the release library")
 	}
 	logger := opts.Logger
 	if logger == nil {
@@ -126,10 +173,10 @@ func Build(ctx context.Context, prepared *input.Prepared, opts Options) (*Plan, 
 
 	movie, err := opts.Movies.Movie(ctx, prepared.Record.TMDBID)
 	if err != nil {
-		return nil, reject("TMDB: %v", err)
+		return nil, none, reject("TMDB: %v", err)
 	}
 	if strconv.Itoa(movie.ID) != strings.TrimLeft(prepared.Record.TMDBID, "0") {
-		return nil, reject("TMDB id %d differs from freeze %s", movie.ID, prepared.Record.TMDBID)
+		return nil, none, reject("TMDB id %d differs from freeze %s", movie.ID, prepared.Record.TMDBID)
 	}
 	if movie.IMDbID == 0 {
 		warnings = append(warnings, "TMDB nie zwrócił IMDb ID — pole imdb = 0")
@@ -137,23 +184,23 @@ func Build(ctx context.Context, prepared *input.Prepared, opts Options) (*Plan, 
 
 	uploadPath := filepath.Join(opts.WorkDir, "upload", prepared.Torrent.InfoHash, prepared.Release+".ptt.torrent")
 	if err := prepared.Torrent.WriteUploadCopy(uploadPath); err != nil {
-		return nil, reject("upload torrent copy: %v", err)
+		return nil, none, reject("upload torrent copy: %v", err)
 	}
 	mediaInfoPath, err := opts.MediaInfo.MediaInfoText(ctx, prepared.MKV.Path, prepared.Release)
 	if err != nil {
-		return nil, reject("MediaInfo: %v", err)
+		return nil, none, reject("MediaInfo: %v", err)
 	}
 	if insideLibrary(prepared.Directory, mediaInfoPath) {
-		return nil, reject("MediaInfo artifact must not be written into the library")
+		return nil, none, reject("MediaInfo artifact must not be written into the library")
 	}
 
 	registry, err := impl.NewRegistry()
 	if err != nil {
-		return nil, reject("upbrr registry: %v", err)
+		return nil, none, reject("upbrr registry: %v", err)
 	}
 	definition, ok := registry.Lookup(input.PTT.Tracker)
 	if !ok {
-		return nil, reject("upbrr registry has no PTT definition")
+		return nil, none, reject("upbrr registry has no PTT definition")
 	}
 	apiKey := strings.TrimSpace(opts.APIKey)
 	if apiKey == "" {
@@ -191,7 +238,7 @@ func Build(ctx context.Context, prepared *input.Prepared, opts Options) (*Plan, 
 	}
 	runtime := trackers.PreparationRuntime{DBPath: filepath.Join(opts.WorkDir, "upbrr.db")}
 	plan, failure := definition.Prepare(ctx, trackers.PreparationInput{
-		Intent:              trackers.PreparationIntentDryRun,
+		Intent:              intent,
 		Tracker:             input.PTT.Tracker,
 		Meta:                subject,
 		RequestedUploadName: &title,
@@ -205,9 +252,14 @@ func Build(ctx context.Context, prepared *input.Prepared, opts Options) (*Plan, 
 		Assets:  &trackers.DescriptionAssets{Description: prepared.Description, Final: true},
 	})
 	if failure != nil {
-		return nil, reject("upbrr PTT preparation: %s", failure.Error())
+		return nil, none, reject("upbrr PTT preparation: %s", failure.Error())
 	}
-	defer func() { _ = plan.Release() }()
+	keep := false
+	defer func() {
+		if !keep {
+			_ = plan.Release()
+		}
+	}()
 	entry := plan.DryRun()
 	out := &Plan{
 		Release:    prepared.Release,
@@ -220,29 +272,29 @@ func Build(ctx context.Context, prepared *input.Prepared, opts Options) (*Plan, 
 		TMInfoHash: prepared.Manifest.InfoHash,
 	}
 	if out.Description, err = verifyEntry(entry, prepared, title, uploadPath, tmdbID); err != nil {
-		return nil, err
+		return nil, none, err
 	}
 	if out.Files, err = fileEvidence(entry.Files); err != nil {
-		return nil, err
+		return nil, none, err
 	}
 	hash, err := infoHashOfFile(uploadPath)
 	if err != nil {
-		return nil, err
+		return nil, none, err
 	}
 	if hash != prepared.Torrent.InfoHash || hash != prepared.Manifest.InfoHash {
-		return nil, reject("upload torrent infohash %s differs from TM %s", hash, prepared.Manifest.InfoHash)
+		return nil, none, reject("upload torrent infohash %s differs from TM %s", hash, prepared.Manifest.InfoHash)
 	}
 	out.InfoHash = hash
 	if opts.Taxonomy != nil {
 		if err := checkTaxonomy(*opts.Taxonomy, entry.Payload, prepared); err != nil {
-			return nil, err
+			return nil, none, err
 		}
 		out.TaxonomyConfirmed = true
 	} else {
 		warnings = append(warnings, "ID kategorii/typu/rozdzielczości PTT niepotwierdzone (D-4b) — użyto domyślnych ID Unit3D z upbrr")
 	}
 	if entry.Banned {
-		return nil, reject("release group is banned on PTT: %s", entry.BannedReason)
+		return nil, none, reject("release group is banned on PTT: %s", entry.BannedReason)
 	}
 	out.Warnings = warnings
 	if out.Warnings == nil {
@@ -250,9 +302,10 @@ func Build(ctx context.Context, prepared *input.Prepared, opts Options) (*Plan, 
 	}
 	out.Fingerprint, err = fingerprint(out)
 	if err != nil {
-		return nil, err
+		return nil, none, err
 	}
-	return out, nil
+	keep = true
+	return out, plan, nil
 }
 
 // verifyEntry enforces that upbrr kept every Zulea input intact.
