@@ -60,7 +60,7 @@ fi
 
 status=0
 echo "== build"
-go build ./cmd/zulea-upbrr/ || status=1
+go build -o /dev/null ./cmd/zulea-upbrr/ || status=1
 echo "== tests (including the PTT contract test)"
 go test -race ./internal/zulea/... ./cmd/zulea-upbrr/ \
 	./internal/trackers/impl/unit3d/... ./internal/trackers/dupe/... \
