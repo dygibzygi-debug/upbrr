@@ -173,7 +173,8 @@ open only when all of these hold:
 - an API key is present;
 - the duplicate check is `CLEAR`;
 - `personal_release` is decided (not `null`) and `mod_queue` is `true` (D-5);
-- MediaInfo is `cli` or `file` (D-6).
+- MediaInfo is `cli` or `file` (D-6);
+- every earlier `accepted` upload is `APPROVED` on PTT (`ptt-status`).
 
 The gate never uploads. A real upload stays a separate, human-confirmed step.
 
@@ -193,7 +194,44 @@ zulea-upbrr verify-uploaded --config F --release REL   # compare a past manual u
 zulea-upbrr seed --config F --release REL --wait 30m [--start]   # qBittorrent: stopped, full recheck, start only at 100%
 zulea-upbrr sync-inputs --dest D --freeze F --freeze-sha S --runs R --titles T --owner 99:100   # uploader-readable copies
 zulea-upbrr ptt-taxonomy --options pasted.html [--apply zulea.json]   # PTT form IDs -> config (W-1)
+zulea-upbrr ptt-status --config F [--release REL]     # moderation state of accepted uploads (read only)
+zulea-upbrr seed-status --config F                     # qBittorrent state of accepted uploads (read only)
+zulea-upbrr history --config F [--out file.csv]        # receipts as CSV (no network)
+zulea-upbrr summary --config F [--with-seed] [--notify]   # short status; optional Discord/Telegram
 ```
+
+## Operations after the canary
+
+- **Moderation.** `ptt-status` asks PTT whether each accepted upload is
+  visible. The standard Unit3D API only lists approved torrents, so the
+  states are `APPROVED`, `PENDING` (only when the site offers
+  `/api/torrents/pending`) and `NOT_VISIBLE` (waiting, rejected or deleted;
+  the API cannot tell these apart). The result is stored in the receipt.
+  While any accepted upload is not `APPROVED`, `queue` returns nothing and the
+  canary gate stays closed. For approved torrents it also compares the PTT
+  infohash with the registered torrent.
+- **Seeding state.** `seed-status` reads qBittorrent only: `SEEDING`,
+  `STOPPED_100`, `CHECKING`, `INCOMPLETE`, `ERROR`, `ABSENT`, `UNKNOWN`.
+- **History.** `history` writes all receipts as CSV (default
+  `work_dir/history/zulea-upbrr-history.csv`, written atomically).
+- **Notifications.** Optional `notifications` config section with
+  `discord_webhook_file`, or `telegram_token_file` plus `telegram_chat_id`.
+  Secrets are read from `0600` files. Messages never mention people
+  (`allowed_mentions` is empty), and errors never contain the URL or token.
+- **Nightly run.** `scripts/zulea/docker/nightly.sh` is a template for the
+  Unraid User Scripts plugin: sync-inputs, check, weekly scan-ptt, ptt-status,
+  seed-status, history and summary. Exit code 3 means "needs attention" and
+  does not stop the run. It never uploads or seeds.
+
+## Upstream updates
+
+`scripts/zulea/upstream-sync.sh` fetches upstream upbrr and merges it into a
+new local branch `zulea/upstream-sync-<time>`. It prints the diff for the
+areas the uploader depends on, then builds and runs the tests. It never
+pushes. `internal/zulea/pttplan/contract_test.go` pins the PTT endpoint, the
+form field set, default IDs and attached files that upbrr produces. If
+upstream changes them, the test fails, and the change needs a manual review
+before any deployment.
 
 `check` and `scan-ptt` also write a Markdown readiness report next to the
 JSON report. A container template lives in `scripts/zulea/docker/`.

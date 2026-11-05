@@ -62,6 +62,10 @@ Użycie:
   zulea-upbrr seed --config FILE --release REL --start-verified       (uruchom seed tylko przy 100%)
   zulea-upbrr sync-inputs --dest DIR --freeze F --freeze-sha SHA [--runs DIR] [--titles F] [--owner 99:100]
   zulea-upbrr ptt-taxonomy --options FILE [--apply CONFIG]            (ID z formularza PTT -> konfiguracja)
+  zulea-upbrr ptt-status --config FILE [--release REL ...]            (moderacja wysłanych; tylko odczyt)
+  zulea-upbrr seed-status --config FILE                               (stan seedu w qBittorrencie; tylko odczyt)
+  zulea-upbrr history --config FILE [--out FILE.csv]                  (historia wysyłek CSV)
+  zulea-upbrr summary --config FILE [--with-seed] [--notify]          (krótkie podsumowanie; opcjonalnie Discord/Telegram)
   zulea-upbrr check-config --config FILE
   zulea-upbrr names --titles FILE --tmdb-id ID REL
   zulea-upbrr compare-torrent ORYGINAL_TM.torrent POBRANY.torrent
@@ -116,6 +120,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runSync(args[1:], stdout, stderr)
 	case "ptt-taxonomy":
 		return runTaxonomy(args[1:], stdout, stderr)
+	case "ptt-status":
+		return runPTTStatus(ctx, args[1:], stdout, stderr)
+	case "seed-status":
+		return runSeedStatus(ctx, args[1:], stdout, stderr)
+	case "history":
+		return runHistory(args[1:], stdout, stderr)
+	case "summary":
+		return runSummary(ctx, args[1:], stdout, stderr)
 	case "submit", "send":
 		fmt.Fprintln(stderr, "zulea-upbrr: nie ma tej komendy. Wysyłka: zulea-upbrr upload (tylko interaktywnie, po dry-run i potwierdzeniu fingerprintu).")
 		return exitUsage
@@ -621,6 +633,110 @@ func runTaxonomy(args []string, stdout, stderr io.Writer) int {
 			return exitRuntime
 		}
 		fmt.Fprintf(stdout, "zapisano do %s\n", *apply)
+	}
+	return exitOK
+}
+
+func runPTTStatus(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	var releases multiFlag
+	cfg, ok := loadConfigFlag("ptt-status", args, stderr, func(fs *flag.FlagSet) {
+		fs.Var(&releases, "release", "nazwa wydania (domyślnie wszystkie accepted)")
+	})
+	if !ok {
+		return exitUsage
+	}
+	logger := app.NewLogger(stderr, false)
+	results, err := (&app.Runner{Config: cfg, Logger: logger}).PTTStatus(ctx, releases)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr ptt-status: %s\n", logger.Sanitize(err.Error()))
+		return exitRuntime
+	}
+	app.RenderStatus(stdout, results)
+	for _, r := range results {
+		if r.State != "APPROVED" {
+			return exitStop
+		}
+	}
+	return exitOK
+}
+
+func runSeedStatus(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	cfg, ok := loadConfigFlag("seed-status", args, stderr, nil)
+	if !ok {
+		return exitUsage
+	}
+	results, err := (&app.Runner{Config: cfg}).SeedStatus(ctx, nil)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr seed-status: %v\n", err)
+		return exitRuntime
+	}
+	app.RenderSeedStatus(stdout, results)
+	for _, r := range results {
+		if r.Seed != app.SeedSeeding {
+			return exitStop
+		}
+	}
+	return exitOK
+}
+
+func runHistory(args []string, stdout, stderr io.Writer) int {
+	var out string
+	cfg, ok := loadConfigFlag("history", args, stderr, func(fs *flag.FlagSet) {
+		fs.StringVar(&out, "out", "", "plik CSV (domyślnie work/history/zulea-upbrr-history.csv)")
+	})
+	if !ok {
+		return exitUsage
+	}
+	n, err := (&app.Runner{Config: cfg}).WriteHistory(out)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr history: %v\n", err)
+		return exitRuntime
+	}
+	fmt.Fprintf(stdout, "zapisano %d wpisów historii\n", n)
+	return exitOK
+}
+
+func runSummary(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	var withSeed, send bool
+	cfg, ok := loadConfigFlag("summary", args, stderr, func(fs *flag.FlagSet) {
+		fs.BoolVar(&withSeed, "with-seed", false, "sprawdź też stan seedu w qBittorrencie")
+		fs.BoolVar(&send, "notify", false, "wyślij do skonfigurowanych kanałów (Discord/Telegram)")
+	})
+	if !ok {
+		return exitUsage
+	}
+	runner := &app.Runner{Config: cfg}
+	var client seed.Client
+	if withSeed && cfg.QBittorrent != nil {
+		c, err := runner.QBitClient()
+		if err != nil {
+			fmt.Fprintf(stderr, "zulea-upbrr summary: %v\n", err)
+			return exitRuntime
+		}
+		client = c
+	}
+	summary, err := runner.BuildSummary(ctx, client)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr summary: %v\n", err)
+		return exitRuntime
+	}
+	fmt.Fprintln(stdout, summary.Text)
+	if send {
+		results, err := runner.Notify(ctx, summary.Text)
+		if err != nil {
+			fmt.Fprintf(stderr, "zulea-upbrr summary: %v\n", err)
+			return exitRuntime
+		}
+		for name, e := range results {
+			if e != nil {
+				fmt.Fprintf(stderr, "powiadomienie %s: %v\n", name, e)
+			} else {
+				fmt.Fprintf(stderr, "powiadomienie %s: wysłane\n", name)
+			}
+		}
+	}
+	if summary.Attention {
+		return exitStop
 	}
 	return exitOK
 }

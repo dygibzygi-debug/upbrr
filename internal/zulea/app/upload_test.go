@@ -36,6 +36,10 @@ type fakeUploadPTT struct {
 	nfo        []byte
 	respondErr bool
 	filterRows string
+	// approved makes /api/torrents/77 visible; pending lists 77 on /api/torrents/pending.
+	approved    bool
+	pending     bool
+	reportedSum string
 }
 
 func (f *fakeUploadPTT) handler(w http.ResponseWriter, r *http.Request) {
@@ -81,6 +85,18 @@ func (f *fakeUploadPTT) handler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		_, _ = w.Write([]byte(`{"success":true,"message":"Torrent uploaded","data":"77"}`))
+	case r.Method == http.MethodGet && r.URL.Path == "/api/torrents/77":
+		if !f.approved {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"type":"torrent","id":77,"attributes":{"name":"x","info_hash":"` + f.reportedSum + `"}}}`))
+	case r.Method == http.MethodGet && r.URL.Path == "/api/torrents/pending":
+		if !f.pending {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":77,"tmdb_id":100001,"name":"x"}]}`))
 	case r.Method == http.MethodGet && r.URL.Path == "/torrent/download/77":
 		// The tracker returns the uploaded info plus its own source and announce.
 		info := trackerInfo(f.t, f.torrent)

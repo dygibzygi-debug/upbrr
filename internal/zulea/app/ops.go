@@ -195,6 +195,13 @@ func (r *Runner) Queue() ([]QueueEntry, string, error) {
 			done[rc.Release] = true
 		}
 	}
+	waiting, err := r.awaitingApproval()
+	if err != nil {
+		return nil, "", err
+	}
+	if len(waiting) > 0 {
+		return nil, scanPath, fmt.Errorf("%w: %s (sprawdź: zulea-upbrr ptt-status)", ErrAwaitingApproval, strings.Join(waiting, ", "))
+	}
 	var out []QueueEntry
 	for _, res := range scan.Results {
 		if res.Chain == "OK" && res.Dupe == pttdupe.StatusClear && !done[res.Release] {
@@ -440,4 +447,117 @@ func (r *Runner) StartSeedVerified(ctx context.Context, release string) (seed.Re
 		return res, fmt.Errorf("zulea: %w", err)
 	}
 	return res, nil
+}
+
+// ErrAwaitingApproval blocks further uploads until earlier ones are approved.
+var ErrAwaitingApproval = errors.New("queue paused: an accepted upload is not yet approved on PTT")
+
+// awaitingApproval lists accepted uploads whose last ptt-status is not APPROVED.
+func (r *Runner) awaitingApproval() ([]string, error) {
+	receipts, err := r.Receipts()
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, rc := range receipts {
+		if rc.State == ReceiptAccepted && rc.Moderation != pttfetch.StateApproved {
+			out = append(out, rc.Release)
+		}
+	}
+	return out, nil
+}
+
+// StatusResult is the moderation check of one accepted upload.
+type StatusResult struct {
+	Release   string `json:"release"`
+	TorrentID string `json:"torrent_id"`
+	State     string `json:"state"`
+	// InfoHashMatch compares the PTT-reported infohash with the registered torrent, when both are known.
+	InfoHashMatch *bool  `json:"info_hash_match,omitempty"`
+	Error         string `json:"error,omitempty"`
+}
+
+// PTTStatus checks every accepted upload (or the given releases) on PTT and
+// records the verdict in its receipt. Read only on the tracker side.
+func (r *Runner) PTTStatus(ctx context.Context, releases []string) ([]StatusResult, error) {
+	key, err := r.pttKey()
+	if err != nil {
+		return nil, err
+	}
+	receipts, err := r.Receipts()
+	if err != nil {
+		return nil, err
+	}
+	want := map[string]bool{}
+	for _, rel := range releases {
+		want[rel] = true
+	}
+	var out []StatusResult
+	for _, rc := range receipts {
+		if rc.State != ReceiptAccepted || len(want) > 0 && !want[rc.Release] {
+			continue
+		}
+		res := StatusResult{Release: rc.Release, TorrentID: rc.TorrentID}
+		if rc.TorrentID == "" {
+			res.Error = "pokwitowanie bez ID torrenta PTT"
+			out = append(out, res)
+			continue
+		}
+		status, serr := pttfetch.Status(ctx, key, rc.TorrentID)
+		if serr != nil {
+			res.Error = serr.Error()
+			out = append(out, res)
+			continue
+		}
+		res.State = status.State
+		if status.InfoHash != "" && rc.RegisteredTorrent != "" {
+			if data, rerr := tm.ReadFile(rc.RegisteredTorrent); rerr == nil {
+				if d, derr := tm.Describe(data); derr == nil {
+					match := d.InfoHash == status.InfoHash
+					res.InfoHashMatch = &match
+				}
+			}
+		}
+		rc.Moderation = status.State
+		rc.ModerationCheckedAt = time.Now().UTC().Format(time.RFC3339)
+		if werr := writeReceipt(r.receiptPath(rc.Release), rc, false); werr != nil {
+			return out, werr
+		}
+		out = append(out, res)
+	}
+	return out, nil
+}
+
+func (r *Runner) pttKey() (string, error) {
+	if r.Config.PTT.APIKeyFile == "" {
+		return "", errors.New("PTT API key is not configured (ptt.api_key_file)")
+	}
+	key, err := readKeyFile(r.Config.PTT.APIKeyFile)
+	if err != nil {
+		return "", fmt.Errorf("ptt: %w", err)
+	}
+	if r.Logger != nil {
+		r.Logger.AddSecret(key)
+	}
+	return key, nil
+}
+
+// RenderStatus writes the moderation table.
+func RenderStatus(w io.Writer, results []StatusResult) {
+	if len(results) == 0 {
+		_, _ = fmt.Fprintln(w, "brak przyjętych uploadów do sprawdzenia")
+		return
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "STAN\tWYDANIE\tPTT ID\tINFOHASH\tUWAGI")
+	for _, r := range results {
+		match := "-"
+		if r.InfoHashMatch != nil {
+			match = map[bool]string{true: "zgodny", false: "RÓŻNY"}[*r.InfoHashMatch]
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", dash(r.State), r.Release, dash(r.TorrentID), match, r.Error)
+	}
+	_ = tw.Flush()
+	_, _ = fmt.Fprintln(w, "APPROVED = widoczny w API; PENDING = na liście oczekujących;")
+	_, _ = fmt.Fprintln(w, "NOT_VISIBLE = czeka na moderację, odrzucony albo usunięty (API tego nie rozróżnia).")
 }

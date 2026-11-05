@@ -8,14 +8,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/autobrr/upbrr/internal/zulea/pttdupe"
 	"github.com/autobrr/upbrr/internal/zulea/pttplan"
 	"github.com/autobrr/upbrr/internal/zulea/seed"
+	"github.com/autobrr/upbrr/internal/zulea/tm"
 	"github.com/autobrr/upbrr/internal/zulea/zuleatest"
 )
 
@@ -52,8 +55,61 @@ func TestScanPTTAndQueue(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// Until PTT approves the upload, the queue is paused.
+	if _, _, err = runner.Queue(); !errors.Is(err, ErrAwaitingApproval) {
+		t.Fatalf("queue must pause until approval: %v", err)
+	}
+	statuses, err := runner.PTTStatus(context.Background(), nil)
+	if err != nil || len(statuses) != 1 || statuses[0].State != "NOT_VISIBLE" {
+		t.Fatalf("status %+v %v", statuses, err)
+	}
+	fake.pending = true
+	if statuses, err = runner.PTTStatus(context.Background(), nil); err != nil || statuses[0].State != "PENDING" {
+		t.Fatalf("pending status %+v %v", statuses, err)
+	}
+	if _, _, err = runner.Queue(); !errors.Is(err, ErrAwaitingApproval) {
+		t.Fatalf("PENDING must still pause the queue: %v", err)
+	}
+	receipt, err := runner.readReceipt(zuleatest.Release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := tm.ReadFile(receipt.RegisteredTorrent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc, err := tm.Describe(registered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.approved, fake.reportedSum = true, desc.InfoHash
+	statuses, err = runner.PTTStatus(context.Background(), nil)
+	if err != nil || statuses[0].State != "APPROVED" || statuses[0].InfoHashMatch == nil || !*statuses[0].InfoHashMatch {
+		t.Fatalf("approved status %+v %v", statuses, err)
+	}
 	if queue, _, err = runner.Queue(); err != nil || len(queue) != 0 {
-		t.Fatalf("uploaded release must leave the queue: %+v %v", queue, err)
+		t.Fatalf("after approval the uploaded release must leave a running queue: %+v %v", queue, err)
+	}
+	fake.reportedSum = strings.Repeat("0", 40)
+	if statuses, err = runner.PTTStatus(context.Background(), nil); err != nil || *statuses[0].InfoHashMatch {
+		t.Fatalf("a different PTT infohash must be reported: %+v %v", statuses, err)
+	}
+}
+
+func TestCanaryGateBlocksWhileAwaitingApproval(t *testing.T) {
+	_, _, runner := uploadSetup(t)
+	fp := dryRunFingerprint(t, runner)
+	if _, err := runner.Upload(context.Background(), UploadRequest{
+		Release:     zuleatest.Release,
+		Fingerprint: fp,
+		Preview:     io.Discard,
+		Confirm:     typed(ConfirmationPhrase(fp)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gate := runner.canaryGate(&pttplan.Plan{TaxonomyConfirmed: true}, &pttdupe.Result{Status: "CLEAR"}, "k")
+	if gate.Ready || !strings.Contains(strings.Join(gate.Blockers, "|"), "niezatwierdzony") {
+		t.Fatalf("gate must block while awaiting approval: %+v", gate)
 	}
 }
 

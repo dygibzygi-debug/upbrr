@@ -50,6 +50,15 @@ type Config struct {
 	PTT      PTTConfig `json:"ptt"`
 	// QBittorrent enables the separate seeding step (zulea-upbrr seed).
 	QBittorrent *QBitConfig `json:"qbittorrent,omitempty"`
+	// Notifications enables summary messages (zulea-upbrr summary --notify).
+	Notifications *NotifyConfig `json:"notifications,omitempty"`
+}
+
+// NotifyConfig holds notification targets; secrets live in 0600 files.
+type NotifyConfig struct {
+	DiscordWebhookFile string `json:"discord_webhook_file,omitempty"`
+	TelegramTokenFile  string `json:"telegram_token_file,omitempty"`
+	TelegramChatID     string `json:"telegram_chat_id,omitempty"`
 }
 
 // QBitConfig configures the seeding step. The password lives in a 0600 file.
@@ -176,6 +185,14 @@ func (c Config) Validate() error {
 		}
 		if (q.Username == "") != (q.PasswordFile == "") {
 			return errors.New("config: qbittorrent.username and qbittorrent.password_file go together")
+		}
+	}
+	if n := c.Notifications; n != nil {
+		if (n.TelegramTokenFile == "") != (n.TelegramChatID == "") {
+			return errors.New("config: notifications.telegram_token_file and telegram_chat_id go together")
+		}
+		if n.DiscordWebhookFile == "" && n.TelegramTokenFile == "" {
+			return errors.New("config: notifications needs discord_webhook_file or telegram_token_file")
 		}
 	}
 	switch c.MediaInfo.Source {

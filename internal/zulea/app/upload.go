@@ -55,6 +55,9 @@ type Receipt struct {
 	DataMatch         *bool  `json:"data_match,omitempty"`
 	StartedAt         string `json:"started_at"`
 	FinishedAt        string `json:"finished_at,omitempty"`
+	// Moderation is the last ptt-status verdict (APPROVED, PENDING, NOT_VISIBLE).
+	Moderation          string `json:"moderation,omitempty"`
+	ModerationCheckedAt string `json:"moderation_checked_at,omitempty"`
 }
 
 // UploadRequest is one human-initiated canary upload.
