@@ -60,6 +60,10 @@ type Receipt struct {
 	ModerationCheckedAt string `json:"moderation_checked_at,omitempty"`
 	// Resolutions is the history of human decisions made with resolve.
 	Resolutions []Resolution `json:"resolutions,omitempty"`
+	// DupeAcceptPath and DupeAcceptSHA point at the human acceptance that
+	// opened the gate for this upload. They are empty when the search was CLEAR.
+	DupeAcceptPath string `json:"dupe_accept_path,omitempty"`
+	DupeAcceptSHA  string `json:"dupe_accept_sha,omitempty"`
 }
 
 // UploadRequest is one human-initiated canary upload.
@@ -142,7 +146,11 @@ func (r *Runner) Upload(ctx context.Context, req UploadRequest) (UploadResult, e
 	if strings.TrimSpace(typed) != phrase {
 		return UploadResult{}, refuse("confirmation phrase did not match; nothing was sent")
 	}
-	plan, upload, err := pttplan.PrepareUpload(ctx, prepared, r.planOptions(sess), fingerprint)
+	opts := r.planOptions(sess)
+	if outcome.Acceptance != nil {
+		opts.AcceptanceSHA = outcome.Acceptance.SHA
+	}
+	plan, upload, err := pttplan.PrepareUpload(ctx, prepared, opts, fingerprint)
 	if err != nil {
 		return UploadResult{}, refuse("%v", err)
 	}
@@ -155,6 +163,10 @@ func (r *Runner) Upload(ctx context.Context, req UploadRequest) (UploadResult, e
 		InfoHash:    plan.TMInfoHash,
 		State:       ReceiptAttempted,
 		StartedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+	if outcome.Acceptance != nil {
+		receipt.DupeAcceptPath = outcome.Acceptance.Path
+		receipt.DupeAcceptSHA = outcome.Acceptance.SHA
 	}
 	path := r.receiptPath(req.Release)
 	if err := writeReceipt(path, receipt, true); err != nil {

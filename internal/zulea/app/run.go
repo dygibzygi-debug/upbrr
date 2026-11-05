@@ -34,6 +34,8 @@ type Outcome struct {
 	Dupe *pttdupe.Result `json:"dupe,omitempty"`
 	// Canary lists what still blocks a first real upload; empty means ready.
 	Canary CanaryGate `json:"canary"`
+	// Acceptance is set when a human dupe-accept decision matches this search.
+	Acceptance *DupeAcceptance `json:"dupe_acceptance,omitempty"`
 	// Description is the exact description text upbrr would send.
 	Description string `json:"description,omitempty"`
 	ReportPath  string `json:"report_path,omitempty"`
@@ -176,7 +178,7 @@ func (r *Runner) mediaInfoSource(logger *Logger) pttplan.MediaInfoSource {
 }
 
 // canaryGate lists every unmet stage-3 precondition from the review (W-1, D-5, D-6).
-func (r *Runner) canaryGate(plan *pttplan.Plan, dupeResult *pttdupe.Result, apiKey string) CanaryGate {
+func (r *Runner) canaryGate(release string, plan *pttplan.Plan, dupeResult *pttdupe.Result, apiKey string) CanaryGate {
 	var blockers []string
 	if plan == nil {
 		blockers = append(blockers, "plan zatrzymany (STOP)")
@@ -191,11 +193,12 @@ func (r *Runner) canaryGate(plan *pttplan.Plan, dupeResult *pttdupe.Result, apiK
 	} else if len(blocked) > 0 {
 		blockers = append(blockers, "wcześniejszy upload wymaga uwagi: "+strings.Join(blocked, "; "))
 	}
+	block, _, classErr := r.classifyDupe(release, dupeResult)
 	switch {
-	case dupeResult == nil:
-		blockers = append(blockers, "duplikaty niesprawdzone")
-	case dupeResult.Status != pttdupe.StatusClear:
-		blockers = append(blockers, "duplikaty: "+dupeResult.Status+" — "+dupeResult.Message)
+	case classErr != nil:
+		blockers = append(blockers, "duplikaty: akceptacja nieczytelna — "+classErr.Error())
+	case block != "":
+		blockers = append(blockers, block)
 	}
 	if r.Config.PTT.PersonalRelease == nil {
 		blockers = append(blockers, "D-5: ptt.personal_release nierozstrzygnięte (sprawdź regulamin PTT)")
@@ -311,9 +314,9 @@ func (r *Runner) evaluate(ctx context.Context, sess *session, rel string) (Outco
 		}
 	}
 	if outcome.Status == StatusReady {
-		outcome.Canary = r.canaryGate(outcome.Plan, outcome.Dupe, sess.apiKey)
+		outcome.Canary = r.canaryGate(rel, outcome.Plan, outcome.Dupe, sess.apiKey)
 	} else {
-		outcome.Canary = r.canaryGate(nil, outcome.Dupe, sess.apiKey)
+		outcome.Canary = r.canaryGate(rel, nil, outcome.Dupe, sess.apiKey)
 	}
 	if err != nil {
 		outcome.Reason = sess.logger.MaskKnown(err.Error())
@@ -339,8 +342,18 @@ func (r *Runner) checkDupes(ctx context.Context, sess *session, prepared *input.
 		return fmt.Errorf("zulea: duplicate check: %w", err)
 	}
 	outcome.Dupe = &result
-	if result.Status == pttdupe.StatusDuplicate {
-		return errors.New("zulea: STOP: duplicate on PTT: " + result.Message)
+	block, matched, classErr := r.classifyDupe(outcome.Release, &result)
+	if classErr != nil {
+		return fmt.Errorf("zulea: duplicate acceptance: %w", classErr)
+	}
+	outcome.Acceptance = matched
+	if outcome.Plan != nil && matched != nil {
+		if err := outcome.Plan.ApplyAcceptanceSHA(matched.SHA); err != nil {
+			return fmt.Errorf("zulea: fingerprint: %w", err)
+		}
+	}
+	if result.Status == pttdupe.StatusDuplicate && matched == nil {
+		return errors.New("zulea: STOP: duplicate on PTT: " + strings.TrimPrefix(block, "duplikaty: "))
 	}
 	return nil
 }
@@ -412,7 +425,7 @@ func render(w io.Writer, outcomes []Outcome) {
 		if o.Status != StatusReady {
 			fmt.Fprintf(w, "POWÓD: %s\n", o.Reason)
 			if o.Dupe != nil {
-				renderDupe(w, o.Dupe)
+				renderDupe(w, o.Dupe, o.Acceptance)
 			}
 			if o.ReportPath != "" {
 				fmt.Fprintf(w, "raport: %s\n", o.ReportPath)
@@ -441,7 +454,7 @@ func render(w io.Writer, outcomes []Outcome) {
 		}
 		fmt.Fprintf(w, "infohash: %s (TM: %s)\n", p.InfoHash, p.TMInfoHash)
 		fmt.Fprintf(w, "ID PTT potwierdzone: %t\n", p.TaxonomyConfirmed)
-		renderDupe(w, o.Dupe)
+		renderDupe(w, o.Dupe, o.Acceptance)
 		for _, warning := range p.Warnings {
 			fmt.Fprintf(w, "UWAGA: %s\n", warning)
 		}
@@ -455,7 +468,7 @@ func render(w io.Writer, outcomes []Outcome) {
 	fmt.Fprintf(w, "\nPODSUMOWANIE: READY=%d STOP=%d. Tryb wyłącznie dry-run: nic nie zostało wysłane.\n", ready, len(outcomes)-ready)
 }
 
-func renderDupe(w io.Writer, d *pttdupe.Result) {
+func renderDupe(w io.Writer, d *pttdupe.Result, accepted *DupeAcceptance) {
 	if d == nil {
 		fmt.Fprintln(w, "duplikaty PTT: nie sprawdzano")
 		return
@@ -467,6 +480,10 @@ func renderDupe(w io.Writer, d *pttdupe.Result) {
 	}
 	for _, reason := range d.ReviewReasons {
 		fmt.Fprintf(w, "  do oceny: %s\n", reason)
+	}
+	if accepted != nil {
+		fmt.Fprintf(w, "DUPLIKAT ZAAKCEPTOWANY PRZEZ CZŁOWIEKA: %s, %s, kandydaci: %s\n",
+			accepted.Reason, accepted.At, acceptedCandidateList(d.Candidates))
 	}
 }
 

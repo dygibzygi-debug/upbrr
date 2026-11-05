@@ -171,7 +171,8 @@ type QueueEntry struct {
 }
 
 // Queue lists, in scan order, releases whose latest scan says chain OK and
-// PTT CLEAR and which have no upload receipt. It uploads nothing.
+// either PTT CLEAR or a human acceptance of that exact candidate set, and
+// which have no upload receipt. It uploads nothing.
 func (r *Runner) Queue() ([]QueueEntry, string, error) {
 	scanPath, err := latestReport(filepath.Join(r.Config.WorkDir, "reports"), "scan-", ".json")
 	if err != nil {
@@ -204,7 +205,18 @@ func (r *Runner) Queue() ([]QueueEntry, string, error) {
 	}
 	var out []QueueEntry
 	for _, res := range scan.Results {
-		if res.Chain == "OK" && res.Dupe == pttdupe.StatusClear && !done[res.Release] {
+		if res.Chain != "OK" || done[res.Release] {
+			continue
+		}
+		_, matched, err := r.classifyDupe(res.Release, &pttdupe.Result{
+			Status:     res.Dupe,
+			Message:    res.Message,
+			Candidates: res.Candidates,
+		})
+		if err != nil {
+			return nil, scanPath, fmt.Errorf("queue: %w", err)
+		}
+		if res.Dupe == pttdupe.StatusClear || matched != nil {
 			out = append(out, QueueEntry{Release: res.Release, Title: res.Title})
 		}
 	}

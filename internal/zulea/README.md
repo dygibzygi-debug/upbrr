@@ -66,10 +66,16 @@ continues:
    | Status | Meaning |
    |---|---|
    | `CLEAR` | complete search, no duplicate, nothing to review |
-   | `DUPLICATE` | a candidate occupies the same slot; the release is a STOP |
-   | `REVIEW` | an incomplete search, a tracker error or candidates needing judgement; blocks the canary |
-   | `NOT_RUN` | no API key; blocks the canary |
-   | `FAILED` | the search failed; blocks the canary |
+   | `DUPLICATE` | a candidate occupies the same slot; the release is a STOP unless a matching human `dupe-accept` is on file |
+   | `REVIEW` | an incomplete search, a tracker error or candidates needing judgement; blocks the canary unless a matching human `dupe-accept` is on file |
+   | `NOT_RUN` | no API key; blocks the canary. Never acceptable |
+   | `FAILED` | the search failed; blocks the canary. Never acceptable |
+
+   PTT has no duplicate rules of its own. When none match, upbrr's conservative
+   fallback (`same_tracker_slot`) treats every search hit as the same slot.
+   That is not a PTT rule. A human may accept one exact candidate set with
+   `dupe-accept` (below). There is no `--force`, and a `-Zulea` candidate or
+   an `exact_duplicate` relation cannot be accepted.
 
 The adapter never opens `<REL>.screens.json`. Screenshot links come only
 from the description.
@@ -171,7 +177,10 @@ open only when all of these hold:
 
 - the PTT IDs are confirmed (W-1);
 - an API key is present;
-- the duplicate check is `CLEAR`;
+- the duplicate check is `CLEAR`, or it is `DUPLICATE`/`REVIEW` and a human
+  `dupe-accept` record matches this exact candidate set (same SHA). `FAILED`
+  and `NOT_RUN` never pass. A candidate whose name contains `-Zulea`, or
+  whose relation is `exact_duplicate`, never passes;
 - `personal_release` is decided (not `null`) and `mod_queue` is `true` (D-5);
 - MediaInfo is `cli` or `file` (D-6);
 - every earlier attempt is settled: `accepted` and `APPROVED` on PTT
@@ -192,7 +201,7 @@ zulea-upbrr check --config /srv/zulea-upbrr/zulea.json            # whole chain,
 zulea-upbrr verify-identity --config /srv/zulea-upbrr/zulea.json --release <REL>
 zulea-upbrr receipts --config /srv/zulea-upbrr/zulea.json
 zulea-upbrr scan-ptt --config F [--delay 3s]          # which OK releases are already on PTT (read only) + Markdown report
-zulea-upbrr queue --config F                           # next CLEAR releases without a receipt (from the latest scan)
+zulea-upbrr queue --config F                           # next CLEAR releases, or a matching dupe-accept, without a receipt
 zulea-upbrr verify-uploaded --config F --release REL   # compare a past manual upload's PTT torrent with TM
 zulea-upbrr seed --config F --release REL --wait 30m [--start]   # qBittorrent: stopped, full recheck, start only at 100%
 zulea-upbrr sync-inputs --dest D --freeze F --freeze-sha S --runs R --titles T --owner 99:100   # uploader-readable copies
@@ -202,6 +211,7 @@ zulea-upbrr seed-status --config F                     # qBittorrent state of ac
 zulea-upbrr history --config F [--out file.csv]        # receipts as CSV (no network)
 zulea-upbrr summary --config F [--with-seed] [--notify]   # short status; optional Discord/Telegram
 zulea-upbrr resolve --config F --release REL --state not_sent|accepted|rejected [--ptt-id ID] --note TEXT
+zulea-upbrr dupe-accept --config F --release REL --reason TEXT [--revoke]
 ```
 
 ### Settling an unclear attempt (`resolve`)
@@ -224,6 +234,37 @@ Every decision is appended to `resolutions` in the receipt. An unreadable
 receipt is kept as `<REL>.ptt.json.unreadable-<time>`, and a `not_sent`
 receipt replaced by a new upload as `<REL>.ptt.json.superseded-<time>`.
 Receipts are always replaced atomically (temporary file, sync, rename).
+
+### Accepting one duplicate set (`dupe-accept`)
+
+`dupe-accept` is the only way a `DUPLICATE` or `REVIEW` result opens the
+canary gate and `queue`. It does not search and it does not upload. It reads
+the newest `scan-ptt` or `plan` report for the release (by file mtime) and
+requires an interactive terminal. `--reason` is mandatory and at most 500
+bytes. There is no `--force`.
+
+Before the operator types anything, the command shows our release (type,
+resolution, size), every candidate (id, name, type, resolution, size,
+relation, reason) and the SHA-256 of that set. The set is the candidates
+sorted by id, name, type and size; the hash also covers resolution, relation,
+reasons and link, so any field change invalidates it. The phrase is
+`AKCEPTUJE <REL-skrót> <12 hex>`, where the short release token is the first
+12 hex characters of SHA-256 over the exact release name and the 12 hex
+characters are the start of the candidate-set SHA.
+
+The record is `work_dir/dupe-accept/<REL>.ptt.json`, mode `0600`, replaced
+atomically. A new decision is appended to `history`. `--revoke` appends a
+withdrawal after the phrase `WYCOFUJE <REL-skrót> <12 hex>` bound to the
+acceptance being withdrawn.
+
+At `plan` and `upload` time the fresh search must still be `DUPLICATE` or
+`REVIEW` and must hash to the same SHA. A new candidate or any changed field
+makes the acceptance void and the release a `DUPLICATE` again. The plan then
+prints `DUPLIKAT ZAAKCEPTOWANY PRZEZ CZŁOWIEKA: <reason>, <time>, kandydaci: …`
+and the plan fingerprint includes the acceptance SHA, so an acceptance
+recorded after a preview was reviewed changes that fingerprint. The upload
+receipt stores `dupe_accept_path` and `dupe_accept_sha`. The decision text is
+not written to the log.
 
 ## Operations after the canary
 
@@ -312,8 +353,10 @@ Exit codes:
 The full plan for each release is written to
 `work_dir/reports/<REL>.ptt.<fingerprint16>.json` (mode `0600`). It includes
 the description, MediaInfo and file digests. The `fingerprint` is SHA-256
-over the canonical payload and file digests: the exact content a later,
-human-confirmed upload must reproduce.
+over the canonical payload, the file digests and, when a human acceptance
+applies, that acceptance's candidate-set SHA. A later confirmed upload must
+reproduce it. An acceptance added after the preview was reviewed changes the
+fingerprint. A plan with no acceptance keeps the previous fingerprint.
 
 ## Tests
 

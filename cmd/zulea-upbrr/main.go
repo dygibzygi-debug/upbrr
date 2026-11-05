@@ -1,9 +1,9 @@
 // Copyright (c) 2026, Zulea contributors.
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// Command zulea-upbrr is the Zulea uploader built on upbrr. Stage 1 is
-// dry-run only: it verifies the freeze -> TM -> manifest chain and shows the
-// exact PTT payload upbrr would send. It has no upload command.
+// Command zulea-upbrr is the Zulea uploader built on upbrr. A real upload
+// exists only as the gated canary command. dupe-accept records a human
+// decision about one duplicate search; it never uploads and it has no --force.
 package main
 
 import (
@@ -24,13 +24,14 @@ import (
 	"golang.org/x/term"
 
 	"github.com/autobrr/upbrr/internal/zulea/app"
+	"github.com/autobrr/upbrr/internal/zulea/dupeaccept"
 	"github.com/autobrr/upbrr/internal/zulea/names"
 	"github.com/autobrr/upbrr/internal/zulea/ptttax"
 	"github.com/autobrr/upbrr/internal/zulea/seed"
 	"github.com/autobrr/upbrr/internal/zulea/tm"
 )
 
-const version = "0.5.0"
+const version = app.Version
 
 // Exit codes.
 const (
@@ -68,6 +69,8 @@ Użycie:
   zulea-upbrr summary --config FILE [--with-seed] [--notify]          (krótkie podsumowanie; opcjonalnie Discord/Telegram)
   zulea-upbrr resolve --config FILE --release REL --state not_sent|accepted|rejected [--ptt-id ID] --note TEKST
                                                                       (decyzja po ręcznym sprawdzeniu PTT; terminal, fraza)
+  zulea-upbrr dupe-accept --config FILE --release REL --reason TEKST [--revoke]
+                                                                      (akceptacja duplikatu z ostatniego raportu; terminal, fraza)
   zulea-upbrr check-config --config FILE
   zulea-upbrr names --titles FILE --tmdb-id ID REL
   zulea-upbrr compare-torrent ORYGINAL_TM.torrent POBRANY.torrent
@@ -77,6 +80,8 @@ Użycie:
 Kody wyjścia: 0 wszystko READY, 3 co najmniej jeden STOP, 2 błąd użycia/konfiguracji, 1 błąd wykonania.
 Upload działa tylko interaktywnie w terminalu: świeży dry-run, zgodny fingerprint, otwarta bramka canary
 i ręcznie wpisana fraza potwierdzenia. Nie ma trybu bez pytania. Nic nie trafia do klienta torrent.
+dupe-accept też wymaga terminala. Czyta ostatni raport scan-ptt albo plan, nie łączy się z trackerem
+i nie ma flagi --force. Bramkę otwiera tylko zgodny zestaw kandydatów (DUPLICATE albo REVIEW).
 `)
 }
 
@@ -132,6 +137,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runSummary(ctx, args[1:], stdout, stderr)
 	case "resolve":
 		return runResolve(args[1:], stdout, stderr, os.Stdin)
+	case "dupe-accept":
+		return runDupeAccept(args[1:], stdout, stderr, os.Stdin)
 	case "submit", "send":
 		fmt.Fprintln(stderr, "zulea-upbrr: nie ma tej komendy. Wysyłka: zulea-upbrr upload (tylko interaktywnie, po dry-run i potwierdzeniu fingerprintu).")
 		return exitUsage
@@ -377,6 +384,57 @@ func runResolve(args []string, stdout, stderr io.Writer, stdin *os.File) int {
 	if receipt.State == app.ReceiptAccepted {
 		fmt.Fprintln(stdout, "Dalej: ptt-status (kolejka czeka na APPROVED); verify-uploaded porówna torrent z PTT z TM.")
 	}
+	return exitOK
+}
+
+func runDupeAccept(args []string, stdout, stderr io.Writer, stdin *os.File) int {
+	fs := flag.NewFlagSet("dupe-accept", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	configPath := fs.String("config", "", "plik konfiguracji JSON (0600)")
+	release := fs.String("release", "", "jedno wydanie")
+	reason := fs.String("reason", "", "dlaczego ten zestaw kandydatów może wejść (albo dlaczego wycofujesz)")
+	revoke := fs.Bool("revoke", false, "wycofaj zapisaną akceptację")
+	if err := fs.Parse(args); err != nil || *configPath == "" || *release == "" || strings.TrimSpace(*reason) == "" || fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "zulea-upbrr dupe-accept: wymagane --config, --release i --reason")
+		return exitUsage
+	}
+	if !isTerminal(stdin) {
+		fmt.Fprintln(stderr, "zulea-upbrr dupe-accept: wymagany interaktywny terminal — decyzji nie można podać przez potok ani plik")
+		return exitUsage
+	}
+	cfg, err := app.LoadConfig(*configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr dupe-accept: %v\n", err)
+		return exitUsage
+	}
+	logger := app.NewLogger(stderr, false)
+	reader := bufio.NewReader(stdin)
+	record, err := (&app.Runner{Config: cfg, Logger: logger}).DupeAccept(app.DupeAcceptRequest{
+		Release: *release,
+		Reason:  *reason,
+		Revoke:  *revoke,
+		Preview: stdout,
+		Confirm: func(prompt string) (string, error) {
+			fmt.Fprint(stdout, prompt)
+			line, rerr := reader.ReadString('\n')
+			if rerr != nil && !errors.Is(rerr, io.EOF) {
+				return "", fmt.Errorf("read confirmation: %w", rerr)
+			}
+			return line, nil
+		},
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr dupe-accept: %s\n", logger.Sanitize(err.Error()))
+		if errors.Is(err, app.ErrUploadRefused) {
+			return exitUsage
+		}
+		return exitRuntime
+	}
+	verb := "ZAPISANO"
+	if *revoke {
+		verb = "WYCOFANO"
+	}
+	fmt.Fprintf(stdout, "%s: %s (decyzja %s, sha %s)\n", verb, dupeaccept.Path(cfg.WorkDir, *release), record.Action, record.CandidateSHA)
 	return exitOK
 }
 

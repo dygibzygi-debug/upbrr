@@ -32,6 +32,27 @@ func TestUploadRequiresTerminal(t *testing.T) {
 }
 
 // TestResolveRequiresTerminal: a receipt decision cannot be scripted either.
+func TestDupeAcceptRequiresTerminal(t *testing.T) {
+	var out, errOut bytes.Buffer
+	args := []string{"dupe-accept", "--config", "x.json", "--release", "R-Zulea", "--reason", "REMUX vs encode"}
+	if code := run(context.Background(), args, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "interaktywny terminal") {
+		t.Fatalf("exit %d err %q", code, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	forced := []string{"dupe-accept", "--config", "x.json", "--release", "R-Zulea", "--reason", "REMUX vs encode", "--force"}
+	if code := run(context.Background(), forced, &out, &errOut); code != exitUsage || strings.Contains(errOut.String(), "interaktywny terminal") {
+		t.Fatalf("--force must be rejected before any prompt, exit %d err %q", code, errOut.String())
+	}
+}
+
+func TestVersionIs060(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"version"}, &out, &errOut); code != exitOK || !strings.Contains(out.String(), "0.6.0") {
+		t.Fatalf("exit %d out %q err %q", code, out.String(), errOut.String())
+	}
+}
+
 func TestResolveRequiresTerminal(t *testing.T) {
 	var out, errOut bytes.Buffer
 	args := []string{"resolve", "--config", "x.json", "--release", "R-Zulea", "--state", "not_sent", "--note", "x"}

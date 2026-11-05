@@ -72,6 +72,11 @@ type Options struct {
 	Movies          MovieSource
 	MediaInfo       MediaInfoSource
 	Logger          api.Logger
+	// AcceptanceSHA is the candidate-set SHA of a human dupe-accept decision.
+	// When set, it becomes part of the plan fingerprint, so an acceptance
+	// recorded after a preview was reviewed changes that fingerprint. It is
+	// not sent to the tracker.
+	AcceptanceSHA string
 }
 
 // File is one multipart file of the plan.
@@ -98,8 +103,8 @@ type Plan struct {
 	// TaxonomyConfirmed reports whether owner-confirmed PTT IDs were checked.
 	TaxonomyConfirmed bool     `json:"taxonomy_confirmed"`
 	Warnings          []string `json:"warnings"`
-	// Fingerprint is SHA-256 over the canonical payload and file digests: the
-	// exact content a later confirmed upload must reproduce.
+	// Fingerprint is SHA-256 over the canonical payload, file digests and, when
+	// a human acceptance applies, that acceptance's candidate-set SHA.
 	Fingerprint string `json:"fingerprint"`
 }
 
@@ -300,7 +305,7 @@ func build(ctx context.Context, prepared *input.Prepared, opts Options, intent t
 	if out.Warnings == nil {
 		out.Warnings = []string{}
 	}
-	out.Fingerprint, err = fingerprint(out)
+	out.Fingerprint, err = fingerprint(out, opts.AcceptanceSHA)
 	if err != nil {
 		return nil, none, err
 	}
@@ -410,7 +415,31 @@ func checkTaxonomy(tax Taxonomy, payload map[string]string, prepared *input.Prep
 	return nil
 }
 
-func fingerprint(p *Plan) (string, error) {
+// ApplyAcceptanceSHA recomputes the fingerprint with the human acceptance
+// SHA included. An empty SHA restores the fingerprint of a plan with no
+// acceptance.
+func (p *Plan) ApplyAcceptanceSHA(acceptanceSHA string) error {
+	if p == nil {
+		return errors.New("pttplan: nil plan")
+	}
+	fp, err := fingerprint(p, acceptanceSHA)
+	if err != nil {
+		return err
+	}
+	p.Fingerprint = fp
+	return nil
+}
+
+func fingerprint(p *Plan, acceptanceSHA string) (string, error) {
+	data, err := fingerprintDocument(p, acceptanceSHA)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func fingerprintDocument(p *Plan, acceptanceSHA string) ([]byte, error) {
 	keys := make([]string, 0, len(p.Payload))
 	for k := range p.Payload {
 		keys = append(keys, k)
@@ -425,16 +454,22 @@ func fingerprint(p *Plan) (string, error) {
 		files = append(files, [3]string{f.Field, strconv.FormatInt(f.Size, 10), f.SHA256})
 	}
 	data, err := json.Marshal(struct {
-		Tracker  string      `json:"tracker"`
-		Endpoint string      `json:"endpoint"`
-		Fields   [][2]string `json:"fields"`
-		Files    [][3]string `json:"files"`
-	}{p.Tracker, p.Endpoint, fields, files})
+		Tracker       string      `json:"tracker"`
+		Endpoint      string      `json:"endpoint"`
+		Fields        [][2]string `json:"fields"`
+		Files         [][3]string `json:"files"`
+		AcceptanceSHA string      `json:"acceptance_sha,omitempty"`
+	}{
+		Tracker:       p.Tracker,
+		Endpoint:      p.Endpoint,
+		Fields:        fields,
+		Files:         files,
+		AcceptanceSHA: acceptanceSHA,
+	})
 	if err != nil {
-		return "", fmt.Errorf("pttplan: fingerprint: %w", err)
+		return nil, fmt.Errorf("pttplan: fingerprint: %w", err)
 	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
+	return data, nil
 }
 
 // insideLibrary reports whether path lies inside the library root that holds releaseDir.

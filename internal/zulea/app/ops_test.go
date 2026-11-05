@@ -107,7 +107,7 @@ func TestCanaryGateBlocksWhileAwaitingApproval(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	gate := runner.canaryGate(&pttplan.Plan{TaxonomyConfirmed: true}, &pttdupe.Result{Status: "CLEAR"}, "k")
+	gate := runner.canaryGate(zuleatest.Release, &pttplan.Plan{TaxonomyConfirmed: true}, &pttdupe.Result{Status: "CLEAR"}, "k")
 	if gate.Ready || !strings.Contains(strings.Join(gate.Blockers, "|"), "wymaga uwagi") {
 		t.Fatalf("gate must block while awaiting approval: %+v", gate)
 	}
