@@ -186,10 +186,10 @@ func (r *Runner) canaryGate(plan *pttplan.Plan, dupeResult *pttdupe.Result, apiK
 	if apiKey == "" {
 		blockers = append(blockers, "brak klucza API PTT (ptt.api_key_file)")
 	}
-	if waiting, err := r.awaitingApproval(); err != nil {
+	if blocked, err := r.queueBlockers(); err != nil {
 		blockers = append(blockers, "pokwitowania nieczytelne: "+err.Error())
-	} else if len(waiting) > 0 {
-		blockers = append(blockers, "poprzedni upload niezatwierdzony na PTT (ptt-status): "+strings.Join(waiting, ", "))
+	} else if len(blocked) > 0 {
+		blockers = append(blockers, "wcześniejszy upload wymaga uwagi: "+strings.Join(blocked, "; "))
 	}
 	switch {
 	case dupeResult == nil:

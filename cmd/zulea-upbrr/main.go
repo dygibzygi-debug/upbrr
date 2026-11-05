@@ -30,7 +30,7 @@ import (
 	"github.com/autobrr/upbrr/internal/zulea/tm"
 )
 
-const version = "0.4.0"
+const version = "0.5.0"
 
 // Exit codes.
 const (
@@ -66,6 +66,8 @@ Użycie:
   zulea-upbrr seed-status --config FILE                               (stan seedu w qBittorrencie; tylko odczyt)
   zulea-upbrr history --config FILE [--out FILE.csv]                  (historia wysyłek CSV)
   zulea-upbrr summary --config FILE [--with-seed] [--notify]          (krótkie podsumowanie; opcjonalnie Discord/Telegram)
+  zulea-upbrr resolve --config FILE --release REL --state not_sent|accepted|rejected [--ptt-id ID] --note TEKST
+                                                                      (decyzja po ręcznym sprawdzeniu PTT; terminal, fraza)
   zulea-upbrr check-config --config FILE
   zulea-upbrr names --titles FILE --tmdb-id ID REL
   zulea-upbrr compare-torrent ORYGINAL_TM.torrent POBRANY.torrent
@@ -128,6 +130,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runHistory(args[1:], stdout, stderr)
 	case "summary":
 		return runSummary(ctx, args[1:], stdout, stderr)
+	case "resolve":
+		return runResolve(args[1:], stdout, stderr, os.Stdin)
 	case "submit", "send":
 		fmt.Fprintln(stderr, "zulea-upbrr: nie ma tej komendy. Wysyłka: zulea-upbrr upload (tylko interaktywnie, po dry-run i potwierdzeniu fingerprintu).")
 		return exitUsage
@@ -328,6 +332,54 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer, std
 	return exitOK
 }
 
+func runResolve(args []string, stdout, stderr io.Writer, stdin *os.File) int {
+	if !isTerminal(stdin) {
+		fmt.Fprintln(stderr, "zulea-upbrr resolve: wymagany interaktywny terminal — decyzji nie można podać przez potok ani plik")
+		return exitUsage
+	}
+	var release, state, pttID, note string
+	cfg, ok := loadConfigFlag("resolve", args, stderr, func(fs *flag.FlagSet) {
+		fs.StringVar(&release, "release", "", "nazwa wydania")
+		fs.StringVar(&state, "state", "", "wynik sprawdzony na PTT: not_sent, accepted albo rejected")
+		fs.StringVar(&pttID, "ptt-id", "", "ID torrenta na PTT (tylko z --state accepted)")
+		fs.StringVar(&note, "note", "", "jak sprawdzono wynik (zapisywane w pokwitowaniu)")
+	})
+	if !ok || release == "" || state == "" {
+		if ok {
+			fmt.Fprintln(stderr, "zulea-upbrr resolve: wymagane --release, --state i --note")
+		}
+		return exitUsage
+	}
+	reader := bufio.NewReader(stdin)
+	receipt, err := (&app.Runner{Config: cfg}).Resolve(app.ResolveRequest{
+		Release: release,
+		State:   state,
+		PTTID:   pttID,
+		Note:    note,
+		Preview: stdout,
+		Confirm: func(prompt string) (string, error) {
+			fmt.Fprint(stdout, prompt)
+			line, rerr := reader.ReadString('\n')
+			if rerr != nil && !errors.Is(rerr, io.EOF) {
+				return "", fmt.Errorf("read confirmation: %w", rerr)
+			}
+			return line, nil
+		},
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr resolve: %v\n", err)
+		if errors.Is(err, app.ErrUploadRefused) {
+			return exitUsage
+		}
+		return exitRuntime
+	}
+	fmt.Fprintf(stdout, "ROZSTRZYGNIĘTO: %s -> %s\n", release, receipt.State)
+	if receipt.State == app.ReceiptAccepted {
+		fmt.Fprintln(stdout, "Dalej: ptt-status (kolejka czeka na APPROVED); verify-uploaded porówna torrent z PTT z TM.")
+	}
+	return exitOK
+}
+
 func runCompare(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 2 {
 		fmt.Fprintln(stderr, "zulea-upbrr compare-torrent: wymagane dwa pliki: ORYGINAL_TM.torrent POBRANY.torrent")
@@ -483,6 +535,10 @@ func runQueue(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 	entries, scanPath, err := (&app.Runner{Config: cfg}).Queue()
+	if errors.Is(err, app.ErrQueueBlocked) {
+		fmt.Fprintf(stderr, "zulea-upbrr queue: kolejka wstrzymana: %v\n", err)
+		return exitStop
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "zulea-upbrr queue: %v\n", err)
 		return exitRuntime

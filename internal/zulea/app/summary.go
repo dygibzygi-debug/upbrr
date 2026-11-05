@@ -66,8 +66,8 @@ func (r *Runner) BuildSummary(ctx context.Context, client seed.Client) (Summary,
 	lines = append(lines, fmt.Sprintf("Uploady: accepted=%d rejected=%d uncertain=%d attempted=%d",
 		states[ReceiptAccepted], states[ReceiptRejected], states[ReceiptUncertain], states[ReceiptAttempted]))
 	attention = attention || states[ReceiptUncertain] > 0 || states[ReceiptAttempted] > 0 || states[ReceiptRejected] > 0
-	if waiting, err := r.awaitingApproval(); err == nil && len(waiting) > 0 {
-		lines = append(lines, fmt.Sprintf("Czeka na zatwierdzenie PTT: %d (kolejka wstrzymana)", len(waiting)))
+	if blocked, err := r.queueBlockers(); err != nil || len(blocked) > 0 {
+		lines = append(lines, fmt.Sprintf("Kolejka wstrzymana: %d pokwitowań wymaga uwagi (receipts, ptt-status, resolve)", len(blocked)))
 		attention = true
 	}
 	if entries, _, err := r.Queue(); err == nil {

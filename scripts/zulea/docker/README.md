@@ -6,9 +6,20 @@ as `nobody:users` (99:100), the owner of the Torrent Maker torrents (mode
 
 ## Build
 
+Base images are pinned by digest. The MediaInfo package version is a
+required build argument, because MediaInfo text is part of the reviewed upload
+(D-6). Read the version Alpine currently ships, then build with it:
+
 ```bash
-docker build -f scripts/zulea/docker/Dockerfile -t zulea-upbrr:local .
+docker run --rm alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a \
+  sh -c 'apk update -q && apk policy mediainfo'
+docker build -f scripts/zulea/docker/Dockerfile --build-arg MEDIAINFO_VERSION=<version> -t zulea-upbrr:local .
+docker run --rm --entrypoint cat zulea-upbrr:local /usr/local/share/zulea-upbrr/BUILD-INFO
 ```
+
+Record `BUILD-INFO` in the deployment report. A later rebuild with the same
+argument either produces the same MediaInfo or fails; it never changes it
+silently.
 
 ## Mounts
 

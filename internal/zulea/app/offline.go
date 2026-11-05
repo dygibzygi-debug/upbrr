@@ -237,7 +237,7 @@ func (r *Runner) Receipts() ([]Receipt, error) {
 		}
 		var receipt Receipt
 		if err := json.Unmarshal(data, &receipt); err != nil {
-			receipt = Receipt{Release: strings.TrimSuffix(entry.Name(), ".ptt.json"), State: "unreadable"}
+			receipt = Receipt{Release: strings.TrimSuffix(entry.Name(), ".ptt.json"), State: ReceiptUnreadable}
 		}
 		out = append(out, receipt)
 	}

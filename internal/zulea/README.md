@@ -174,7 +174,10 @@ open only when all of these hold:
 - the duplicate check is `CLEAR`;
 - `personal_release` is decided (not `null`) and `mod_queue` is `true` (D-5);
 - MediaInfo is `cli` or `file` (D-6);
-- every earlier `accepted` upload is `APPROVED` on PTT (`ptt-status`).
+- every earlier attempt is settled: `accepted` and `APPROVED` on PTT
+  (`ptt-status`), proven `not_sent`, or `rejected` and acknowledged with
+  `resolve`. An `attempted`, `uncertain`, unacknowledged `rejected`,
+  unreadable or unknown receipt blocks the queue and the gate.
 
 The gate never uploads. A real upload stays a separate, human-confirmed step.
 
@@ -198,7 +201,29 @@ zulea-upbrr ptt-status --config F [--release REL]     # moderation state of acce
 zulea-upbrr seed-status --config F                     # qBittorrent state of accepted uploads (read only)
 zulea-upbrr history --config F [--out file.csv]        # receipts as CSV (no network)
 zulea-upbrr summary --config F [--with-seed] [--notify]   # short status; optional Discord/Telegram
+zulea-upbrr resolve --config F --release REL --state not_sent|accepted|rejected [--ptt-id ID] --note TEXT
 ```
+
+### Settling an unclear attempt (`resolve`)
+
+When a receipt is `attempted` or `uncertain` (or cannot be decoded), the
+upload may or may not have reached PTT. The queue and the canary gate stay
+closed until the operator checks PTT by hand and records the outcome with
+`resolve`. It needs an interactive terminal, a `--note` saying how the
+outcome was verified, and the typed phrase `ROZSTRZYGAM <state> <12 hex>`.
+The hex is derived from the exact receipt bytes shown, so a receipt that
+changed meanwhile is refused. Allowed decisions:
+
+| Current receipt | Allowed `--state` |
+|---|---|
+| `attempted`, `uncertain`, unreadable | `not_sent` (may be uploaded again), `accepted --ptt-id ID` (then `ptt-status`), `rejected` |
+| `rejected` (not yet acknowledged) | `rejected` (acknowledge; never uploaded again automatically) |
+| `accepted`, not `APPROVED` | `rejected` (rejected or deleted by moderation) |
+
+Every decision is appended to `resolutions` in the receipt. An unreadable
+receipt is kept as `<REL>.ptt.json.unreadable-<time>`, and a `not_sent`
+receipt replaced by a new upload as `<REL>.ptt.json.superseded-<time>`.
+Receipts are always replaced atomically (temporary file, sync, rename).
 
 ## Operations after the canary
 

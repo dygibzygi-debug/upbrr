@@ -56,7 +56,7 @@ func TestScanPTTAndQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Until PTT approves the upload, the queue is paused.
-	if _, _, err = runner.Queue(); !errors.Is(err, ErrAwaitingApproval) {
+	if _, _, err = runner.Queue(); !errors.Is(err, ErrQueueBlocked) {
 		t.Fatalf("queue must pause until approval: %v", err)
 	}
 	statuses, err := runner.PTTStatus(context.Background(), nil)
@@ -67,7 +67,7 @@ func TestScanPTTAndQueue(t *testing.T) {
 	if statuses, err = runner.PTTStatus(context.Background(), nil); err != nil || statuses[0].State != "PENDING" {
 		t.Fatalf("pending status %+v %v", statuses, err)
 	}
-	if _, _, err = runner.Queue(); !errors.Is(err, ErrAwaitingApproval) {
+	if _, _, err = runner.Queue(); !errors.Is(err, ErrQueueBlocked) {
 		t.Fatalf("PENDING must still pause the queue: %v", err)
 	}
 	receipt, err := runner.readReceipt(zuleatest.Release)
@@ -108,7 +108,7 @@ func TestCanaryGateBlocksWhileAwaitingApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	gate := runner.canaryGate(&pttplan.Plan{TaxonomyConfirmed: true}, &pttdupe.Result{Status: "CLEAR"}, "k")
-	if gate.Ready || !strings.Contains(strings.Join(gate.Blockers, "|"), "niezatwierdzony") {
+	if gate.Ready || !strings.Contains(strings.Join(gate.Blockers, "|"), "wymaga uwagi") {
 		t.Fatalf("gate must block while awaiting approval: %+v", gate)
 	}
 }

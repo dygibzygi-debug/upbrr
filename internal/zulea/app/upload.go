@@ -58,6 +58,8 @@ type Receipt struct {
 	// Moderation is the last ptt-status verdict (APPROVED, PENDING, NOT_VISIBLE).
 	Moderation          string `json:"moderation,omitempty"`
 	ModerationCheckedAt string `json:"moderation_checked_at,omitempty"`
+	// Resolutions is the history of human decisions made with resolve.
+	Resolutions []Resolution `json:"resolutions,omitempty"`
 }
 
 // UploadRequest is one human-initiated canary upload.
@@ -228,7 +230,7 @@ func (r *Runner) checkNoReceipt(release string) error {
 	}
 	var receipt Receipt
 	if err := json.Unmarshal(data, &receipt); err != nil {
-		return refuse("receipt is unreadable; resolve it manually")
+		return refuse("receipt is unreadable; check PTT, then: zulea-upbrr resolve")
 	}
 	if receipt.State == ReceiptNotSent {
 		return nil
@@ -240,26 +242,43 @@ func validName(rel string) bool {
 	return rel != "" && rel != "." && rel != ".." && !strings.ContainsAny(rel, `/\`+"\x00")
 }
 
+// writeReceipt replaces the receipt atomically: a synced temporary file in the
+// same directory is renamed over the old one, so a crash leaves either the old
+// or the new receipt, never a torn one. With exclusive, only a missing or
+// not_sent receipt may be replaced; the not_sent one is kept as evidence.
 func writeReceipt(path string, receipt Receipt, exclusive bool) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("receipt directory: %w", err)
 	}
 	data, err := json.MarshalIndent(receipt, "", "  ")
 	if err != nil {
 		return fmt.Errorf("receipt encode: %w", err)
 	}
-	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	if exclusive {
 		if existing, rerr := os.ReadFile(path); rerr == nil {
 			var old Receipt
 			if json.Unmarshal(existing, &old) != nil || old.State != ReceiptNotSent {
 				return errors.New("receipt already exists")
 			}
+			superseded := path + ".superseded-" + time.Now().UTC().Format("20060102T150405Z")
+			//nolint:gosec // Receipt path is work_dir/receipts/<validated release name>.
+			if err := os.WriteFile(superseded, existing, 0o600); err != nil {
+				return fmt.Errorf("receipt keep not_sent: %w", err)
+			}
+		} else if !errors.Is(rerr, fs.ErrNotExist) {
+			return fmt.Errorf("receipt read: %w", rerr)
 		}
 	}
-	file, err := os.OpenFile(path, flags, 0o600)
+	file, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return fmt.Errorf("receipt open: %w", err)
+		return fmt.Errorf("receipt temp: %w", err)
+	}
+	tmp := file.Name()
+	defer func() { _ = os.Remove(tmp) }()
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("receipt chmod: %w", err)
 	}
 	if _, err := file.Write(append(data, '\n')); err != nil {
 		_ = file.Close()
@@ -272,7 +291,21 @@ func writeReceipt(path string, receipt Receipt, exclusive bool) error {
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("receipt close: %w", err)
 	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("receipt rename: %w", err)
+	}
+	syncDir(dir)
 	return nil
+}
+
+// syncDir makes a rename durable where the platform supports directory sync.
+func syncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	_ = d.Sync()
+	_ = d.Close()
 }
 
 func compareRegistered(tmPath, registeredPath string) (tm.Comparison, error) {

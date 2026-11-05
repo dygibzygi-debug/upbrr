@@ -31,6 +31,15 @@ func TestUploadRequiresTerminal(t *testing.T) {
 	}
 }
 
+// TestResolveRequiresTerminal: a receipt decision cannot be scripted either.
+func TestResolveRequiresTerminal(t *testing.T) {
+	var out, errOut bytes.Buffer
+	args := []string{"resolve", "--config", "x.json", "--release", "R-Zulea", "--state", "not_sent", "--note", "x"}
+	if code := run(context.Background(), args, &out, &errOut); code != exitUsage || !strings.Contains(errOut.String(), "interaktywny terminal") {
+		t.Fatalf("exit %d err %q", code, errOut.String())
+	}
+}
+
 func TestCompareTorrentCommand(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run(context.Background(), []string{"compare-torrent", "only-one"}, &out, &errOut); code != exitUsage {

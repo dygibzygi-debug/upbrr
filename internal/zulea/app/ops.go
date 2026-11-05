@@ -195,12 +195,12 @@ func (r *Runner) Queue() ([]QueueEntry, string, error) {
 			done[rc.Release] = true
 		}
 	}
-	waiting, err := r.awaitingApproval()
+	blocked, err := r.queueBlockers()
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("%w: %w", ErrQueueBlocked, err)
 	}
-	if len(waiting) > 0 {
-		return nil, scanPath, fmt.Errorf("%w: %s (sprawdź: zulea-upbrr ptt-status)", ErrAwaitingApproval, strings.Join(waiting, ", "))
+	if len(blocked) > 0 {
+		return nil, scanPath, fmt.Errorf("%w: %s", ErrQueueBlocked, strings.Join(blocked, "; "))
 	}
 	var out []QueueEntry
 	for _, res := range scan.Results {
@@ -447,24 +447,6 @@ func (r *Runner) StartSeedVerified(ctx context.Context, release string) (seed.Re
 		return res, fmt.Errorf("zulea: %w", err)
 	}
 	return res, nil
-}
-
-// ErrAwaitingApproval blocks further uploads until earlier ones are approved.
-var ErrAwaitingApproval = errors.New("queue paused: an accepted upload is not yet approved on PTT")
-
-// awaitingApproval lists accepted uploads whose last ptt-status is not APPROVED.
-func (r *Runner) awaitingApproval() ([]string, error) {
-	receipts, err := r.Receipts()
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, rc := range receipts {
-		if rc.State == ReceiptAccepted && rc.Moderation != pttfetch.StateApproved {
-			out = append(out, rc.Release)
-		}
-	}
-	return out, nil
 }
 
 // StatusResult is the moderation check of one accepted upload.

@@ -223,7 +223,7 @@ func (c Config) PTTEnabled() bool {
 
 // readKeyFile reads a private single-token key file.
 func readKeyFile(path string) (string, error) {
-	info, err := os.Lstat(path)
+	info, err := os.Lstat(path) //nolint:gosec // Operator-configured key file path; symlinks and loose modes are refused below.
 	if err != nil {
 		return "", fmt.Errorf("key file: %w", err)
 	}
@@ -233,7 +233,7 @@ func readKeyFile(path string) (string, error) {
 	if info.Mode().Perm()&0o077 != 0 {
 		return "", fmt.Errorf("key file mode %04o is too open (0600 required)", info.Mode().Perm())
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // Operator-configured key file path, checked above.
 	if err != nil {
 		return "", fmt.Errorf("key file: read: %w", err)
 	}
