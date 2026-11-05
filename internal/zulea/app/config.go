@@ -27,8 +27,12 @@ type Config struct {
 	FreezePath   string `json:"freeze_path"`
 	FreezeSHA256 string `json:"freeze_sha256"`
 	TitlesPath   string `json:"titles_path"`
-	ManifestPath string `json:"manifest_path"`
-	TMOutputDir  string `json:"tm_output_dir"`
+	// One TM run: manifest_path + tm_output_dir.
+	ManifestPath string `json:"manifest_path,omitempty"`
+	TMOutputDir  string `json:"tm_output_dir,omitempty"`
+	// All TM runs: tm_runs_dir (<RUN_ID>/manifest-*.tsv) + tm_output_base (<RUN_ID>/*.torrent).
+	TMRunsDir    string `json:"tm_runs_dir,omitempty"`
+	TMOutputBase string `json:"tm_output_base,omitempty"`
 	WorkDir      string `json:"work_dir"`
 	// TMDBKeyFile holds the TMDB v3 API key (mode 0600). Required for PTT (decision D-2).
 	TMDBKeyFile string `json:"tmdb_key_file"`
@@ -121,14 +125,18 @@ func (c Config) Validate() error {
 		"freeze_path":   c.FreezePath,
 		"freeze_sha256": c.FreezeSHA256,
 		"titles_path":   c.TitlesPath,
-		"manifest_path": c.ManifestPath,
-		"tm_output_dir": c.TMOutputDir,
 		"work_dir":      c.WorkDir,
 	}
 	for name, value := range required {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("config: %s is required", name)
 		}
+	}
+	single := c.ManifestPath != "" && c.TMOutputDir != ""
+	multi := c.TMRunsDir != "" && c.TMOutputBase != ""
+	partial := (c.ManifestPath != "") != (c.TMOutputDir != "") || (c.TMRunsDir != "") != (c.TMOutputBase != "")
+	if single == multi || partial {
+		return errors.New("config: set either manifest_path + tm_output_dir (one TM run) or tm_runs_dir + tm_output_base (all runs)")
 	}
 	for name, value := range map[string]string{"library_root": c.LibraryRoot, "work_dir": c.WorkDir} {
 		if !filepath.IsAbs(value) {

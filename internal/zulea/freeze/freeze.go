@@ -207,3 +207,37 @@ func VerifyMKV(rec Record, path string) (Identity, error) {
 	}
 	return got, nil
 }
+
+// Releases returns every distinct release name, sorted, with the number of
+// names that have at least one record with status OK.
+func (f *Freeze) Releases() (all []string, ok int) {
+	for name, records := range f.records {
+		all = append(all, name)
+		for _, rec := range records {
+			if rec.Status == StatusOK {
+				ok++
+				break
+			}
+		}
+	}
+	slices.Sort(all)
+	return all, ok
+}
+
+// Status returns the statuses recorded for release (empty when absent).
+func (f *Freeze) Status(release string) []string {
+	out := make([]string, 0, len(f.records[release]))
+	for _, rec := range f.records[release] {
+		out = append(out, rec.Status)
+	}
+	return out
+}
+
+// Record returns the single record for release regardless of status.
+func (f *Freeze) Record(release string) (Record, bool) {
+	records := f.records[release]
+	if len(records) != 1 {
+		return Record{}, false
+	}
+	return records[0], true
+}

@@ -257,6 +257,8 @@ func (r *Runner) open(releases []string) (*session, error) {
 		TitlesPath:   r.Config.TitlesPath,
 		ManifestPath: r.Config.ManifestPath,
 		TorrentDir:   r.Config.TMOutputDir,
+		TMRunsDir:    r.Config.TMRunsDir,
+		TMOutputBase: r.Config.TMOutputBase,
 		Disk:         r.Config.DiskCheck(),
 	})
 	if err != nil {

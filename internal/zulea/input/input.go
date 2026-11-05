@@ -89,8 +89,12 @@ type Sources struct {
 	FreezePath   string
 	FreezeSHA256 string
 	TitlesPath   string
+	// Single TM run: ManifestPath + TorrentDir.
 	ManifestPath string
 	TorrentDir   string
+	// All TM runs: TMRunsDir (<RUN_ID>/manifest-*.tsv) + TMOutputBase (<RUN_ID>/*.torrent).
+	TMRunsDir    string
+	TMOutputBase string
 	// Disk is the W-2 physical disk check (freeze physical_N5_disk vs file location).
 	Disk freeze.DiskCheck
 }
@@ -132,11 +136,11 @@ func (osReader) ReadFile(path string, limit int64) ([]byte, error) {
 
 // Adapter prepares releases from Sources.
 type Adapter struct {
-	sources  Sources
-	reader   Reader
-	freeze   *freeze.Freeze
-	titles   names.Titles
-	manifest *tm.Manifest
+	sources Sources
+	reader  Reader
+	freeze  *freeze.Freeze
+	titles  names.Titles
+	catalog tm.Catalog
 }
 
 // Open loads the freeze (SHA-verified), titles file and TM manifest.
@@ -147,11 +151,9 @@ func Open(sources Sources) (*Adapter, error) {
 // OpenWithReader is Open with an explicit Reader for release files.
 func OpenWithReader(sources Sources, reader Reader) (*Adapter, error) {
 	for name, value := range map[string]string{
-		"library root":      sources.LibraryRoot,
-		"freeze":            sources.FreezePath,
-		"titles":            sources.TitlesPath,
-		"manifest":          sources.ManifestPath,
-		"torrent directory": sources.TorrentDir,
+		"library root": sources.LibraryRoot,
+		"freeze":       sources.FreezePath,
+		"titles":       sources.TitlesPath,
 	} {
 		if strings.TrimSpace(value) == "" {
 			return nil, fmt.Errorf("zulea: %s path is required", name)
@@ -168,24 +170,51 @@ func OpenWithReader(sources Sources, reader Reader) (*Adapter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("zulea: titles: %w", err)
 	}
-	manifest, err := tm.LoadManifest(sources.ManifestPath)
+	catalog, err := openCatalog(sources)
 	if err != nil {
-		return nil, fmt.Errorf("zulea: TM manifest: %w", err)
+		return nil, err
 	}
 	return &Adapter{
-		sources:  sources,
-		reader:   reader,
-		freeze:   frozen,
-		titles:   titles,
-		manifest: manifest,
+		sources: sources,
+		reader:  reader,
+		freeze:  frozen,
+		titles:  titles,
+		catalog: catalog,
 	}, nil
 }
 
 // Freeze exposes the loaded freeze for reports.
 func (a *Adapter) Freeze() *freeze.Freeze { return a.freeze }
 
-// ManifestMeta exposes manifest comment metadata (TRYB, FREEZE_SHA, ...).
-func (a *Adapter) ManifestMeta() map[string]string { return a.manifest.Meta }
+// openCatalog selects exactly one TM source: a single run or all runs.
+func openCatalog(sources Sources) (tm.Catalog, error) {
+	single := strings.TrimSpace(sources.ManifestPath) != "" || strings.TrimSpace(sources.TorrentDir) != ""
+	multi := strings.TrimSpace(sources.TMRunsDir) != "" || strings.TrimSpace(sources.TMOutputBase) != ""
+	switch {
+	case single && multi:
+		return nil, errors.New("zulea: configure either one TM run (manifest + torrent directory) or all runs (runs + output base), not both")
+	case single:
+		if strings.TrimSpace(sources.ManifestPath) == "" || strings.TrimSpace(sources.TorrentDir) == "" {
+			return nil, errors.New("zulea: a single TM run needs both the manifest and the torrent directory")
+		}
+		manifest, err := tm.LoadManifest(sources.ManifestPath)
+		if err != nil {
+			return nil, fmt.Errorf("zulea: TM manifest: %w", err)
+		}
+		return tm.SingleRun{Manifest: manifest, TorrentDir: sources.TorrentDir}, nil
+	case multi:
+		if strings.TrimSpace(sources.TMRunsDir) == "" || strings.TrimSpace(sources.TMOutputBase) == "" {
+			return nil, errors.New("zulea: all TM runs need both the runs directory and the output base")
+		}
+		catalog, err := tm.LoadMultiRun(sources.TMRunsDir, sources.TMOutputBase)
+		if err != nil {
+			return nil, fmt.Errorf("zulea: TM runs: %w", err)
+		}
+		return catalog, nil
+	default:
+		return nil, errors.New("zulea: TM source is required (manifest + torrent directory, or runs + output base)")
+	}
+}
 
 // FileEvidence is the identity of one library file.
 type FileEvidence struct {
@@ -214,8 +243,10 @@ type Prepared struct {
 	Torrent     *tm.Torrent
 	TorrentPath string
 	Manifest    tm.ManifestRow
-	Title       string
-	Naming      names.Result
+	// TMRunID names the proving TM run (empty in single-run mode).
+	TMRunID string
+	Title   string
+	Naming  names.Result
 	// Warnings are non-blocking findings to show in the dry-run.
 	Warnings []string
 }
@@ -267,10 +298,11 @@ func (a *Adapter) Prepare(release string, profile Profile) (*Prepared, error) {
 	if err != nil {
 		return nil, wrapStop(err)
 	}
-	row, err := a.manifest.Proven(release, profile.TMProfile)
+	located, err := a.catalog.Locate(release, profile.TMProfile)
 	if err != nil {
 		return nil, wrapStop(err)
 	}
+	row := located.Row
 	if row.MKVIno != rec.MKVIno || row.MKVSize != rec.MKVSize || row.MKVMtime != rec.MKVMtime ||
 		row.TMDBID != rec.TMDBID || row.SourceID != rec.SourceID {
 		return nil, stop("TM manifest row differs from freeze record (MKV identity, TMDB_ID or SOURCE_ID)")
@@ -291,7 +323,7 @@ func (a *Adapter) Prepare(release string, profile Profile) (*Prepared, error) {
 		return nil, err
 	}
 
-	torrentPath := filepath.Join(a.sources.TorrentDir, release+profile.TorrentSuffix)
+	torrentPath := filepath.Join(located.TorrentDir, release+profile.TorrentSuffix)
 	raw, err := tm.ReadFile(torrentPath)
 	if err != nil {
 		return nil, wrapStop(err)
@@ -330,7 +362,7 @@ func (a *Adapter) Prepare(release string, profile Profile) (*Prepared, error) {
 	}
 
 	warnings := append([]string(nil), naming.Warnings...)
-	if meta := a.manifest.Meta["FREEZE_SHA"]; meta != "" && meta != a.freeze.SHA256 {
+	if meta := located.FreezeSHA; meta != "" && meta != a.freeze.SHA256 {
 		warnings = append(warnings, "manifest TM pochodzi z innego pliku zamrożenia (rekord zgodny)")
 	}
 	images := imageURLs(description)
@@ -357,6 +389,7 @@ func (a *Adapter) Prepare(release string, profile Profile) (*Prepared, error) {
 		Torrent:           torrent,
 		TorrentPath:       torrentPath,
 		Manifest:          row,
+		TMRunID:           located.RunID,
 		Title:             title,
 		Naming:            naming,
 		Warnings:          warnings,

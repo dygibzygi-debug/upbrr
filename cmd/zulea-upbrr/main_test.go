@@ -56,3 +56,12 @@ func TestPlanRequiresConfig(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 }
+
+func TestOfflineCommandsRequireConfig(t *testing.T) {
+	for _, cmd := range []string{"check", "verify-identity", "receipts"} {
+		var out, errOut bytes.Buffer
+		if code := run(context.Background(), []string{cmd}, &out, &errOut); code != exitUsage {
+			t.Fatalf("%s: exit %d", cmd, code)
+		}
+	}
+}

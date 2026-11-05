@@ -132,7 +132,12 @@ func NFO(release string) []byte {
 // New builds the environment under t.TempDir().
 func New(t *testing.T, opts Options) *Env {
 	t.Helper()
-	root := t.TempDir()
+	return NewAt(t, t.TempDir(), opts)
+}
+
+// NewAt builds the environment under root (which must be empty or absent).
+func NewAt(t *testing.T, root string, opts Options) *Env {
+	t.Helper()
 	env := &Env{
 		Root:        root,
 		MountBase:   filepath.Join(root, "mnt"),

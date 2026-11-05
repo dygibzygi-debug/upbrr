@@ -290,3 +290,101 @@ func TestOpenRejectsInvalidDiskCheck(t *testing.T) {
 		}
 	}
 }
+
+func multiSources(env *zuleatest.Env) Sources {
+	src := sources(env)
+	src.ManifestPath, src.TorrentDir = "", ""
+	src.TMRunsDir = filepath.Dir(filepath.Dir(env.ManifestPath))
+	src.TMOutputBase = filepath.Dir(env.TorrentDir)
+	return src
+}
+
+// addRun copies the fixture run as run-id with a manifest named by stamp,
+// optionally rewriting manifest text.
+func addRun(t *testing.T, env *zuleatest.Env, runID, stamp string, rewrite func(string) string) {
+	t.Helper()
+	manifest, err := os.ReadFile(env.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(manifest)
+	if rewrite != nil {
+		text = rewrite(text)
+	}
+	runDir := filepath.Join(filepath.Dir(filepath.Dir(env.ManifestPath)), runID)
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "manifest-"+stamp+".tsv"), []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	torrent, err := os.ReadFile(env.TorrentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(filepath.Dir(env.TorrentDir), runID)
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outDir, filepath.Base(env.TorrentPath)), torrent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMultiRunPicksNewestProvingRun(t *testing.T) {
+	env := zuleatest.New(t, zuleatest.Options{})
+	addRun(t, env, "run-2", "20261105-120000", nil)
+	addRun(t, env, "run-plan", "20261106-000000", func(s string) string {
+		return strings.Replace(s, "# TRYB=APPLY", "# TRYB=PLAN", 1)
+	})
+	adapter, err := Open(multiSources(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := adapter.Prepare(zuleatest.Release, PTT)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if prepared.TMRunID != "run-2" || filepath.Base(filepath.Dir(prepared.TorrentPath)) != "run-2" {
+		t.Fatalf("expected newest proving run run-2, got %q (%s)", prepared.TMRunID, prepared.TorrentPath)
+	}
+}
+
+func TestMultiRunStopsOnConflictingInfoHash(t *testing.T) {
+	env := zuleatest.New(t, zuleatest.Options{})
+	addRun(t, env, "run-2", "20261105-120000", func(s string) string {
+		return strings.Replace(s, env.InfoHash, strings.Repeat("f", 40), 1)
+	})
+	adapter, err := Open(multiSources(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Prepare(zuleatest.Release, PTT); !errors.Is(err, ErrStop) || !strings.Contains(err.Error(), "disagree") {
+		t.Fatalf("expected STOP on conflicting runs, got %v", err)
+	}
+}
+
+func TestTMSourceConfiguration(t *testing.T) {
+	env := zuleatest.New(t, zuleatest.Options{})
+	both := multiSources(env)
+	both.ManifestPath, both.TorrentDir = env.ManifestPath, env.TorrentDir
+	partial := multiSources(env)
+	partial.TMOutputBase = ""
+	none := multiSources(env)
+	none.TMRunsDir, none.TMOutputBase = "", ""
+	for name, src := range map[string]Sources{
+		"both":    both,
+		"partial": partial,
+		"none":    none,
+	} {
+		if _, err := Open(src); err == nil {
+			t.Errorf("%s: expected configuration error", name)
+		}
+	}
+	addRun(t, env, "run-x", "20261105-120000", func(s string) string {
+		return strings.Replace(s, "# TRYB=APPLY", "# RUN_ID=other\n# TRYB=APPLY", 1)
+	})
+	if _, err := Open(multiSources(env)); err == nil {
+		t.Error("a manifest whose RUN_ID differs from its directory must fail the load")
+	}
+}

@@ -26,7 +26,7 @@ import (
 	"github.com/autobrr/upbrr/internal/zulea/tm"
 )
 
-const version = "0.1.0-stage1"
+const version = "0.3.0"
 
 // Exit codes.
 const (
@@ -48,6 +48,9 @@ func usage(w io.Writer) {
 
 Użycie:
   zulea-upbrr plan --config FILE (--release REL ... | --list FILE) [--debug]
+  zulea-upbrr check --config FILE [--release REL ... | --list FILE]   (cały łańcuch, bez sieci; domyślnie wszystkie OK)
+  zulea-upbrr verify-identity --config FILE --release REL           (diagnostyka W-3: ino/size/mtime, dysk)
+  zulea-upbrr receipts --config FILE                                (pokwitowania wysyłek)
   zulea-upbrr check-config --config FILE
   zulea-upbrr names --titles FILE --tmdb-id ID REL
   zulea-upbrr compare-torrent ORYGINAL_TM.torrent POBRANY.torrent
@@ -84,6 +87,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runUpload(ctx, args[1:], stdout, stderr, os.Stdin)
 	case "compare-torrent":
 		return runCompare(args[1:], stdout, stderr)
+	case "check":
+		return runCheck(args[1:], stdout, stderr)
+	case "verify-identity":
+		return runVerifyIdentity(args[1:], stdout, stderr)
+	case "receipts":
+		return runReceipts(args[1:], stdout, stderr)
 	case "submit", "send":
 		fmt.Fprintln(stderr, "zulea-upbrr: nie ma tej komendy. Wysyłka: zulea-upbrr upload (tylko interaktywnie, po dry-run i potwierdzeniu fingerprintu).")
 		return exitUsage
@@ -308,5 +317,92 @@ func runCompare(args []string, stdout, stderr io.Writer) int {
 	if !comparison.OK() {
 		return exitRuntime
 	}
+	return exitOK
+}
+
+// loadConfigFlag parses --config plus extra flags registered by register and loads the config.
+func loadConfigFlag(name string, args []string, stderr io.Writer, register func(*flag.FlagSet)) (app.Config, bool) {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	configPath := fs.String("config", "", "plik konfiguracji JSON (0600)")
+	if register != nil {
+		register(fs)
+	}
+	if err := fs.Parse(args); err != nil || *configPath == "" || fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "zulea-upbrr %s: wymagane --config\n", name)
+		return app.Config{}, false
+	}
+	cfg, err := app.LoadConfig(*configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr %s: %v\n", name, err)
+		return app.Config{}, false
+	}
+	return cfg, true
+}
+
+func runCheck(args []string, stdout, stderr io.Writer) int {
+	var releases multiFlag
+	var listPath string
+	cfg, ok := loadConfigFlag("check", args, stderr, func(fs *flag.FlagSet) {
+		fs.Var(&releases, "release", "nazwa wydania (można powtarzać)")
+		fs.StringVar(&listPath, "list", "", "plik z listą wydań")
+	})
+	if !ok {
+		return exitUsage
+	}
+	if listPath != "" {
+		listed, err := readList(listPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "zulea-upbrr check: %v\n", err)
+			return exitUsage
+		}
+		releases = append(releases, listed...)
+	}
+	summary, err := (&app.Runner{Config: cfg}).Check(releases)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr check: %v\n", err)
+		return exitRuntime
+	}
+	app.RenderCheck(stdout, summary)
+	if summary.Stop > 0 {
+		return exitStop
+	}
+	return exitOK
+}
+
+func runVerifyIdentity(args []string, stdout, stderr io.Writer) int {
+	var release string
+	cfg, ok := loadConfigFlag("verify-identity", args, stderr, func(fs *flag.FlagSet) {
+		fs.StringVar(&release, "release", "", "nazwa wydania")
+	})
+	if !ok || release == "" {
+		if ok {
+			fmt.Fprintln(stderr, "zulea-upbrr verify-identity: wymagane --release")
+		}
+		return exitUsage
+	}
+	rep, err := (&app.Runner{Config: cfg}).VerifyIdentity(release)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr verify-identity: %v\n", err)
+		return exitRuntime
+	}
+	app.RenderIdentity(stdout, rep)
+	if !rep.IdentityOK {
+		return exitStop
+	}
+	return exitOK
+}
+
+func runReceipts(args []string, stdout, stderr io.Writer) int {
+	cfg, ok := loadConfigFlag("receipts", args, stderr, nil)
+	if !ok {
+		return exitUsage
+	}
+	list, err := (&app.Runner{Config: cfg}).Receipts()
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr receipts: %v\n", err)
+		return exitRuntime
+	}
+	app.RenderReceipts(stdout, list)
 	return exitOK
 }

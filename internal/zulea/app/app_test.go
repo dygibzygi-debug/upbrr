@@ -259,6 +259,9 @@ func TestLoadConfig(t *testing.T) {
 		"no freeze sha":      func(c *Config) { c.FreezeSHA256 = "" },
 		"library inside":     func(c *Config) { c.LibraryRoot = filepath.Join(c.WorkDir, "lib") },
 		"no disk":            func(c *Config) { c.PhysicalDisk = "" },
+		"no tm source":       func(c *Config) { c.ManifestPath, c.TMOutputDir = "", "" },
+		"both tm sources":    func(c *Config) { c.TMRunsDir, c.TMOutputBase = "/r", "/o" },
+		"partial tm runs":    func(c *Config) { c.ManifestPath, c.TMOutputDir, c.TMRunsDir = "", "", "/r" },
 		"no disk mode":       func(c *Config) { c.DiskCheckMode = "" },
 		"no mediainfo":       func(c *Config) { c.MediaInfo = MediaInfoConfig{} },
 		"cli without binary": func(c *Config) { c.MediaInfo = MediaInfoConfig{Source: MediaInfoCLI} },
@@ -353,5 +356,20 @@ func TestCanaryBlocksUpbrrMediaInfo(t *testing.T) {
 	gate := (&Runner{Config: cfg}).canaryGate(&pttplan.Plan{TaxonomyConfirmed: true}, nil, "k")
 	if gate.Ready || !strings.Contains(strings.Join(gate.Blockers, "|"), "D-6") {
 		t.Fatalf("gate %+v", gate)
+	}
+}
+
+func TestDryRunWithAllTMRuns(t *testing.T) {
+	env, cfg, _ := setup(t)
+	cfg.ManifestPath, cfg.TMOutputDir = "", ""
+	cfg.TMRunsDir = filepath.Dir(filepath.Dir(env.ManifestPath))
+	cfg.TMOutputBase = filepath.Dir(env.TorrentDir)
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	runner := &Runner{Config: cfg, MediaInfo: fakeMediaInfo{dir: filepath.Join(cfg.WorkDir, "mi")}}
+	outcomes, err := runner.DryRun(context.Background(), []string{zuleatest.Release})
+	if err != nil || outcomes[0].Status != StatusReady {
+		t.Fatalf("multi-run dry-run: %+v %v", outcomes, err)
 	}
 }

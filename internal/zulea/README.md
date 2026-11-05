@@ -103,8 +103,8 @@ The config is JSON, mode `0600`, and unknown fields are rejected. It holds
   "freeze_path": "/srv/freeze/zulea-frozen-names-YYYYMMDD-HHMMSS.tsv",
   "freeze_sha256": "<64 lowercase hex>",
   "titles_path": "/srv/release-panel/tmdb-titles.tsv",
-  "manifest_path": "/srv/tm/runs/<run-id>/manifest-YYYYMMDD-HHMMSS.tsv",
-  "tm_output_dir": "/srv/tm/output/<run-id>",
+  "tm_runs_dir": "/srv/tm/runs",
+  "tm_output_base": "/srv/tm/output",
   "work_dir": "/srv/zulea-upbrr/work",
   "tmdb_key_file": "/srv/zulea-upbrr/secrets/tmdb.key",
   "physical_disk": "disk1",
@@ -125,6 +125,9 @@ The config is JSON, mode `0600`, and unknown fields are rejected. It holds
 }
 ```
 
+- TM source: either `tm_runs_dir` + `tm_output_base` (all batch runs: the
+  newest run whose manifest proves the release wins, and runs that disagree
+  on the infohash are a STOP), or `manifest_path` + `tm_output_dir` (one run).
 - `trackers` empty means nothing runs; stage 1 accepts only `PTT`.
 - `work_dir` and `library_root` must not overlap. Mount the library read-only.
 - Omit `taxonomy` until the owner confirms the PTT form IDs. The dry-run then
@@ -181,7 +184,12 @@ zulea-upbrr check-config --config /srv/zulea-upbrr/zulea.json
 zulea-upbrr plan --config /srv/zulea-upbrr/zulea.json --release <REL>
 zulea-upbrr plan --config /srv/zulea-upbrr/zulea.json --list releases.txt
 zulea-upbrr names --titles tmdb-titles.tsv --tmdb-id <ID> <REL>
+zulea-upbrr check --config /srv/zulea-upbrr/zulea.json            # whole chain, every OK release, no network
+zulea-upbrr verify-identity --config /srv/zulea-upbrr/zulea.json --release <REL>
+zulea-upbrr receipts --config /srv/zulea-upbrr/zulea.json
 ```
+
+A container template lives in `scripts/zulea/docker/`.
 
 ## Upload (canary, human-confirmed)
 
