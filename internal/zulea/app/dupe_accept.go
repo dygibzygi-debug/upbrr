@@ -37,10 +37,11 @@ type DupeAcceptRequest struct {
 }
 
 type searchSnapshot struct {
-	Status     string
-	Message    string
-	Candidates []pttdupe.Candidate
-	Path       string
+	Status         string
+	Message        string
+	Candidates     []pttdupe.Candidate
+	Path           string
+	SearchComplete bool
 }
 
 type releaseFacts struct {
@@ -79,6 +80,9 @@ func (r *Runner) recordAcceptance(req DupeAcceptRequest, reason string) (dupeacc
 	}
 	writeAcceptPreview(req.Preview, req.Release, facts, snap, reason)
 	if err := dupeaccept.AcceptableStatus(snap.Status); err != nil {
+		return dupeaccept.Record{}, refuse("%v", err)
+	}
+	if err := dupeaccept.SearchRefused(snap.SearchComplete, snap.Candidates); err != nil {
 		return dupeaccept.Record{}, refuse("%v", err)
 	}
 	if err := dupeaccept.HardRefuse(snap.Candidates); err != nil {
@@ -249,7 +253,8 @@ func writeAcceptPreview(w io.Writer, release string, facts releaseFacts, snap se
 	_, _ = fmt.Fprintf(w, "Akceptacja duplikatu (nic nie jest wysyłane, brak sieci).\nŹródło wyszukiwania: %s\n", snap.Path)
 	_, _ = fmt.Fprintf(w, "Wydanie: %s\n  typ: %s\n  rozdzielczość: %s\n  rozmiar: %d B\n  skrót: %s\n",
 		release, facts.Type, facts.Resolution, facts.Size, dupeaccept.ReleaseShort(release))
-	_, _ = fmt.Fprintf(w, "Wynik wyszukiwania: %s — %s\nKandydaci (%d):\n", snap.Status, snap.Message, len(snap.Candidates))
+	_, _ = fmt.Fprintf(w, "Wynik wyszukiwania: %s — %s (kompletne: %t)\nKandydaci (%d):\n",
+		snap.Status, snap.Message, snap.SearchComplete, len(snap.Candidates))
 	for _, c := range snap.Candidates {
 		_, _ = fmt.Fprintln(w, "  "+formatCandidate(c))
 	}
@@ -308,6 +313,9 @@ func (r *Runner) classifyDupe(release string, dupe *pttdupe.Result) (string, *Du
 	}
 	if dupe.Status != pttdupe.StatusDuplicate && dupe.Status != pttdupe.StatusReview {
 		return "duplikaty: " + dupe.Status + " — " + dupe.Message, nil, nil
+	}
+	if err := dupeaccept.SearchRefused(dupe.SearchComplete, dupe.Candidates); err != nil {
+		return "duplikaty: " + dupe.Status + " — " + err.Error(), nil, nil
 	}
 	if err := dupeaccept.HardRefuse(dupe.Candidates); err != nil {
 		return "duplikaty: " + dupe.Status + " — " + err.Error(), nil, nil
@@ -429,6 +437,7 @@ func snapshotFromPlan(path, release string) (*searchSnapshot, error) {
 		snap.Status = outcome.Dupe.Status
 		snap.Message = outcome.Dupe.Message
 		snap.Candidates = outcome.Dupe.Candidates
+		snap.SearchComplete = outcome.Dupe.SearchComplete
 	}
 	return snap, nil
 }
@@ -447,10 +456,11 @@ func snapshotFromScan(path, release string) (*searchSnapshot, bool, error) {
 			continue
 		}
 		return &searchSnapshot{
-			Status:     res.Dupe,
-			Message:    res.Message,
-			Candidates: res.Candidates,
-			Path:       path,
+			Status:         res.Dupe,
+			Message:        res.Message,
+			Candidates:     res.Candidates,
+			Path:           path,
+			SearchComplete: res.SearchComplete,
 		}, true, nil
 	}
 	return nil, false, nil

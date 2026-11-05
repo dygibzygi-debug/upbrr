@@ -67,7 +67,7 @@ continues:
    |---|---|
    | `CLEAR` | complete search, no duplicate, nothing to review |
    | `DUPLICATE` | a candidate occupies the same slot; the release is a STOP unless a matching human `dupe-accept` is on file |
-   | `REVIEW` | an incomplete search, a tracker error or candidates needing judgement; blocks the canary unless a matching human `dupe-accept` is on file |
+   | `REVIEW` | candidates needing judgement on a complete search; blocks the canary unless a matching human `dupe-accept` is on file. An incomplete search is refused |
    | `NOT_RUN` | no API key; blocks the canary. Never acceptable |
    | `FAILED` | the search failed; blocks the canary. Never acceptable |
 
@@ -177,10 +177,12 @@ open only when all of these hold:
 
 - the PTT IDs are confirmed (W-1);
 - an API key is present;
-- the duplicate check is `CLEAR`, or it is `DUPLICATE`/`REVIEW` and a human
-  `dupe-accept` record matches this exact candidate set (same SHA). `FAILED`
-  and `NOT_RUN` never pass. A candidate whose name contains `-Zulea`, or
-  whose relation is `exact_duplicate`, never passes;
+- the duplicate check is `CLEAR`, or it is `DUPLICATE`/`REVIEW`, the search
+  is complete, the candidate list is not empty, and a human `dupe-accept`
+  record matches this exact candidate set (same SHA). `FAILED`, `NOT_RUN`,
+  an incomplete search and an empty candidate list never pass. A candidate
+  whose name contains `-Zulea` in any letter case, or whose relation is
+  `exact_duplicate`, never passes;
 - `personal_release` is decided (not `null`) and `mod_queue` is `true` (D-5);
 - MediaInfo is `cli` or `file` (D-6);
 - every earlier attempt is settled: `accepted` and `APPROVED` on PTT
@@ -258,7 +260,9 @@ withdrawal after the phrase `WYCOFUJE <REL-skrót> <12 hex>` bound to the
 acceptance being withdrawn.
 
 At `plan` and `upload` time the fresh search must still be `DUPLICATE` or
-`REVIEW` and must hash to the same SHA. A new candidate or any changed field
+`REVIEW`, must be complete, must list at least one candidate, and must hash
+to the same SHA. An incomplete search or an empty candidate list is a hard
+refusal, including when a file already records that set. A new candidate or any changed field
 makes the acceptance void and the release a `DUPLICATE` again. The plan then
 prints `DUPLIKAT ZAAKCEPTOWANY PRZEZ CZŁOWIEKA: <reason>, <time>, kandydaci: …`
 and the plan fingerprint includes the acceptance SHA, so an acceptance

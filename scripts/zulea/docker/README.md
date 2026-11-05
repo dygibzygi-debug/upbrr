@@ -92,8 +92,9 @@ docker run --rm -it --network none ... zulea-upbrr:local dupe-accept --config /s
 ```
 
 `dupe-accept` reads the newest `scan-ptt` or `plan` report under `/work`.
-Nightly automation must not run it. Package v5 for the operator is
-`scripts/zulea/deploy/v5/`.
+Nightly automation must not run it. The operator runbook in
+`scripts/zulea/deploy/v5/` changes only the image tag on the wrapper already
+deployed on the host. It does not replace that wrapper.
 
 The container never adds anything to qBittorrent. After an accepted upload,
 the registered torrent is in `/work`, and adding it with a full recheck stays

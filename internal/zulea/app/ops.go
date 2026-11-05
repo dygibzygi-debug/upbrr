@@ -36,6 +36,9 @@ type ScanResult struct {
 	Dupe        string              `json:"dupe,omitempty"` // CLEAR, DUPLICATE, REVIEW, NOT_RUN, FAILED
 	Message     string              `json:"message,omitempty"`
 	Candidates  []pttdupe.Candidate `json:"candidates,omitempty"`
+	// SearchComplete is false when the duplicate search did not finish. An
+	// acceptance of that result is refused.
+	SearchComplete bool `json:"search_complete"`
 }
 
 // ScanSummary is the result of ScanPTT.
@@ -98,6 +101,7 @@ func (r *Runner) ScanPTT(ctx context.Context, releases []string, delay time.Dura
 			result.Dupe, result.Message = pttdupe.StatusFailed, derr.Error()
 		} else {
 			result.Dupe, result.Message, result.Candidates = dupe.Status, dupe.Message, dupe.Candidates
+			result.SearchComplete = dupe.SearchComplete
 		}
 		summary.Counts[result.Dupe]++
 		summary.Results = append(summary.Results, result)
@@ -209,9 +213,10 @@ func (r *Runner) Queue() ([]QueueEntry, string, error) {
 			continue
 		}
 		_, matched, err := r.classifyDupe(res.Release, &pttdupe.Result{
-			Status:     res.Dupe,
-			Message:    res.Message,
-			Candidates: res.Candidates,
+			Status:         res.Dupe,
+			Message:        res.Message,
+			Candidates:     res.Candidates,
+			SearchComplete: res.SearchComplete,
 		})
 		if err != nil {
 			return nil, scanPath, fmt.Errorf("queue: %w", err)

@@ -88,6 +88,28 @@ func TestHardRefuse(t *testing.T) {
 	if err := HardRefuse([]pttdupe.Candidate{candidate("3", "Example Encode-GRP", 10)}); err != nil {
 		t.Fatal(err)
 	}
+	for _, name := range []string{"Other.Film.2014.REMUX-zulea", "Other.Film.2014.REMUX-ZULEA"} {
+		lower := candidate("4", name, 10)
+		if err := HardRefuse([]pttdupe.Candidate{lower}); err == nil || !strings.Contains(strings.ToLower(err.Error()), "-zulea") {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestSearchRefusedIncompleteOrEmpty(t *testing.T) {
+	one := []pttdupe.Candidate{candidate("7", "Encode-GRP", 40)}
+	if err := SearchRefused(false, one); err == nil || !strings.Contains(err.Error(), "niekompletne") {
+		t.Fatalf("incomplete: %v", err)
+	}
+	if err := SearchRefused(true, nil); err == nil || !strings.Contains(err.Error(), "pusta") {
+		t.Fatalf("empty: %v", err)
+	}
+	if err := SearchRefused(true, []pttdupe.Candidate{}); err == nil || !strings.Contains(err.Error(), "pusta") {
+		t.Fatalf("empty slice: %v", err)
+	}
+	if err := SearchRefused(true, one); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPhraseBindsReleaseAndSet(t *testing.T) {

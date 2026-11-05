@@ -140,7 +140,7 @@ func HardRefuse(candidates []pttdupe.Candidate) error {
 		if label == "" {
 			label = c.Name
 		}
-		if strings.Contains(c.Name, "-"+names.Group) {
+		if containsOurGroup(c.Name) {
 			problems = append(problems, "kandydat "+label+" ("+c.Name+") jest grupy -"+names.Group)
 		}
 		if strings.EqualFold(c.Relation, string(api.DupeRelationExactDuplicate)) {
@@ -151,6 +151,23 @@ func HardRefuse(candidates []pttdupe.Candidate) error {
 		return nil
 	}
 	return fmt.Errorf("twarda odmowa: %s", strings.Join(problems, "; "))
+}
+
+// SearchRefused is a hard refusal when the search did not show every candidate.
+// An incomplete search or an empty candidate list must not be accepted, and a
+// stored acceptance of such a result must not open the gate.
+func SearchRefused(searchComplete bool, candidates []pttdupe.Candidate) error {
+	if !searchComplete {
+		return errors.New("twarda odmowa: wyszukiwanie niekompletne")
+	}
+	if len(candidates) == 0 {
+		return errors.New("twarda odmowa: pusta lista kandydatów")
+	}
+	return nil
+}
+
+func containsOurGroup(name string) bool {
+	return strings.Contains(strings.ToLower(name), "-"+strings.ToLower(names.Group))
 }
 
 // hashCandidate is the canonical candidate document. Field order is the

@@ -270,9 +270,127 @@ func TestDupeAcceptRefusesExactDuplicate(t *testing.T) {
 	}
 }
 
+func TestDupeAcceptRefusesIncompleteOrEmptySearch(t *testing.T) {
+	_, _, runner := uploadSetup(t)
+	partial := dupeResult(pttdupe.StatusReview, grpCandidate("7", "Partial Encode-GRP", 40))
+	partial.SearchComplete = false
+	partial.Message = "wyszukiwanie niekompletne — wymagana ręczna kontrola"
+	incompletePath := plantPlan(t, runner.Config.WorkDir, partial, "incomplete")
+	called := false
+	restore := blockNetwork(t)
+	_, err := runner.DupeAccept(DupeAcceptRequest{
+		Release: zuleatest.Release,
+		Reason:  acceptReason,
+		Preview: &bytes.Buffer{},
+		Confirm: confirmCalls(t, "no", &called),
+	})
+	restore()
+	if err == nil || called || !strings.Contains(err.Error(), "niekompletne") {
+		t.Fatalf("incomplete called=%v err=%v", called, err)
+	}
+
+	past := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(incompletePath, past, past); err != nil {
+		t.Fatal(err)
+	}
+	empty := dupeResult(pttdupe.StatusReview)
+	empty.SearchComplete = true
+	empty.Message = "kandydaci wymagają ręcznej oceny"
+	plantPlan(t, runner.Config.WorkDir, empty, "empty")
+	called = false
+	restore = blockNetwork(t)
+	_, err = runner.DupeAccept(DupeAcceptRequest{
+		Release: zuleatest.Release,
+		Reason:  acceptReason,
+		Preview: &bytes.Buffer{},
+		Confirm: confirmCalls(t, "no", &called),
+	})
+	restore()
+	if err == nil || called || !strings.Contains(err.Error(), "pusta") {
+		t.Fatalf("empty called=%v err=%v", called, err)
+	}
+
+	sha, err := dupeaccept.SetSHA(partial.Candidates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := dupeaccept.Record{Release: zuleatest.Release}
+	rec.Append(dupeaccept.Decision{
+		Action:       dupeaccept.ActionAccept,
+		At:           "2026-11-05T00:00:00Z",
+		Reason:       acceptReason,
+		CandidateSHA: sha,
+		Candidates:   partial.Candidates,
+		Status:       pttdupe.StatusReview,
+		Version:      Version,
+	})
+	if err := dupeaccept.Save(dupeaccept.Path(runner.Config.WorkDir, zuleatest.Release), rec); err != nil {
+		t.Fatal(err)
+	}
+	gate := runner.canaryGate(zuleatest.Release, &pttplan.Plan{TaxonomyConfirmed: true}, partial, "k")
+	if gate.Ready || !strings.Contains(strings.Join(gate.Blockers, "|"), "niekompletne") {
+		t.Fatalf("incomplete gate %+v", gate)
+	}
+
+	emptySHA, err := dupeaccept.SetSHA(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyRec := dupeaccept.Record{Release: zuleatest.Release}
+	emptyRec.Append(dupeaccept.Decision{
+		Action:       dupeaccept.ActionAccept,
+		At:           "2026-11-05T00:00:01Z",
+		Reason:       acceptReason,
+		CandidateSHA: emptySHA,
+		Candidates:   nil,
+		Status:       pttdupe.StatusReview,
+		Version:      Version,
+	})
+	if err := dupeaccept.Save(dupeaccept.Path(runner.Config.WorkDir, zuleatest.Release), emptyRec); err != nil {
+		t.Fatal(err)
+	}
+	emptyGate := runner.canaryGate(zuleatest.Release, &pttplan.Plan{TaxonomyConfirmed: true}, empty, "k")
+	if emptyGate.Ready || !strings.Contains(strings.Join(emptyGate.Blockers, "|"), "pusta") {
+		t.Fatalf("empty gate %+v", emptyGate)
+	}
+}
+
+func TestDupeAcceptRefusesGroupIgnoringCase(t *testing.T) {
+	for _, name := range []string{
+		"Another.Film.2014.MULTi.1080p.REMUX.BluRay.AVC.DTS-HD.MA.5.1-zulea",
+		"Another.Film.2014.MULTi.1080p.REMUX.BluRay.AVC.DTS-HD.MA.5.1-ZULEA",
+	} {
+		t.Run(name[len(name)-6:], func(t *testing.T) {
+			_, _, runner := uploadSetup(t)
+			found := dupeResult(pttdupe.StatusDuplicate, pttdupe.Candidate{
+				ID:         "8",
+				Name:       name,
+				Type:       "Remux",
+				Resolution: "1080p",
+				SizeBytes:  40,
+				Relation:   "same_slot",
+				Reasons:    []string{"same_tracker_slot: same slot"},
+			})
+			plantPlan(t, runner.Config.WorkDir, found, "group")
+			called := false
+			restore := blockNetwork(t)
+			defer restore()
+			_, err := runner.DupeAccept(DupeAcceptRequest{
+				Release: zuleatest.Release,
+				Reason:  acceptReason,
+				Preview: &bytes.Buffer{},
+				Confirm: confirmCalls(t, "no", &called),
+			})
+			if err == nil || called || !strings.Contains(strings.ToLower(err.Error()), "-zulea") {
+				t.Fatalf("called %v err %v", called, err)
+			}
+		})
+	}
+}
+
 func TestDupeAcceptRefusesFailedAndNotRun(t *testing.T) {
 	_, _, runner := uploadSetup(t)
-	plantPlan(t, runner.Config.WorkDir, dupeResult(pttdupe.StatusFailed, grpCandidate("7", "Encode-GRP", 40)), "failed")
+	firstFailed := plantPlan(t, runner.Config.WorkDir, dupeResult(pttdupe.StatusFailed, grpCandidate("7", "Encode-GRP", 40)), "failed")
 	called := false
 	restore := blockNetwork(t)
 	_, err := runner.DupeAccept(DupeAcceptRequest{
@@ -295,6 +413,9 @@ func TestDupeAcceptRefusesFailedAndNotRun(t *testing.T) {
 	failedReport := plantPlan(t, runner.Config.WorkDir, dupeResult(pttdupe.StatusFailed), "older-failed")
 	past := time.Now().Add(-2 * time.Hour)
 	if err := os.Chtimes(failedReport, past, past); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(firstFailed, past, past); err != nil {
 		t.Fatal(err)
 	}
 	called = false
