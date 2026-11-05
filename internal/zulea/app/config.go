@@ -52,6 +52,21 @@ type Config struct {
 	QBittorrent *QBitConfig `json:"qbittorrent,omitempty"`
 	// Notifications enables summary messages (zulea-upbrr summary --notify).
 	Notifications *NotifyConfig `json:"notifications,omitempty"`
+	// Nightly holds optional unattended jobs. All of them default to off.
+	Nightly *NightlyConfig `json:"nightly,omitempty"`
+}
+
+// NightlyConfig holds switches for the nightly script. Zero values are off.
+type NightlyConfig struct {
+	// ScanPTT runs one read-only PTT scan per night. The operator turns it
+	// on. The scan waits at least 3s between releases and stops on the first
+	// API error without retrying.
+	ScanPTT bool `json:"scan_ptt"`
+}
+
+// NightlyScanEnabled reports whether the nightly script should run scan-ptt.
+func (c Config) NightlyScanEnabled() bool {
+	return c.Nightly != nil && c.Nightly.ScanPTT
 }
 
 // NotifyConfig holds notification targets; secrets live in 0600 files.
@@ -61,15 +76,17 @@ type NotifyConfig struct {
 	TelegramChatID     string `json:"telegram_chat_id,omitempty"`
 }
 
-// QBitConfig configures the seeding step. The password lives in a 0600 file.
+// QBitConfig configures the seeding step. The password lives in a 0600 file
+// under the secrets mount; the operator writes that file. SavePath is the
+// library path as the qBittorrent container sees it (its own mount, read
+// only), never a path derived from Category.
 type QBitConfig struct {
 	Host         string `json:"host"`
-	Username     string `json:"username,omitempty"`
-	PasswordFile string `json:"password_file,omitempty"`
-	// SavePath is the library root as qBittorrent sees it (its own mount).
-	SavePath string `json:"save_path"`
-	Category string `json:"category,omitempty"`
-	Tags     string `json:"tags,omitempty"`
+	Username     string `json:"username"`
+	PasswordFile string `json:"password_file"`
+	SavePath     string `json:"save_path"`
+	Category     string `json:"category,omitempty"`
+	Tags         string `json:"tags,omitempty"`
 }
 
 // MediaInfo sources (decision D-6).
@@ -180,11 +197,14 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: physical_disk/disk_check_mode: %w", err)
 	}
 	if q := c.QBittorrent; q != nil {
-		if strings.TrimSpace(q.Host) == "" || strings.TrimSpace(q.SavePath) == "" {
-			return errors.New("config: qbittorrent.host and qbittorrent.save_path are required")
+		if strings.TrimSpace(q.Host) == "" || strings.TrimSpace(q.Username) == "" || strings.TrimSpace(q.PasswordFile) == "" {
+			return errors.New("config: qbittorrent.host, username and password_file are required")
 		}
-		if (q.Username == "") != (q.PasswordFile == "") {
-			return errors.New("config: qbittorrent.username and qbittorrent.password_file go together")
+		if err := validateQBitSavePath(q.SavePath); err != nil {
+			return err
+		}
+		if strings.ContainsAny(q.Category, `/\`) {
+			return errors.New("config: qbittorrent.category is a category name, not a path")
 		}
 	}
 	if n := c.Notifications; n != nil {
@@ -207,6 +227,17 @@ func (c Config) Validate() error {
 	case MediaInfoUpbrr:
 	default:
 		return errors.New("config: mediainfo.source must be \"cli\", \"file\" or \"upbrr\" (decision D-6)")
+	}
+	return nil
+}
+
+// validateQBitSavePath checks the library path as the qBittorrent container
+// sees it. It is a POSIX path inside that container, not a path on the
+// uploader host, and it must not be computed from a category.
+func validateQBitSavePath(savePath string) error {
+	savePath = strings.TrimSpace(savePath)
+	if savePath == "" || !strings.HasPrefix(savePath, "/") || strings.Contains(savePath, "..") || strings.ContainsAny(savePath, "\\") {
+		return errors.New("config: qbittorrent.save_path must be an absolute path as the qBittorrent container sees the library")
 	}
 	return nil
 }

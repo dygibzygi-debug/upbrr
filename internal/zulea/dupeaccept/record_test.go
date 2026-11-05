@@ -6,6 +6,7 @@ package dupeaccept
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -160,12 +161,20 @@ func TestSaveIsAtomicPrivateAndKeepsHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := os.Stat(path)
-	if err != nil || st.Mode().Perm() != 0o600 {
-		t.Fatalf("mode %v err %v", st, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	dst, err := os.Stat(filepath.Dir(path))
-	if err != nil || dst.Mode().Perm() != 0o700 {
-		t.Fatalf("dir mode %v err %v", dst, err)
+	// Windows reports 0666 for every writable file: os.Chmod only toggles
+	// the read-only attribute, so 0600/0700 cannot be observed there. The
+	// uploader runs on Linux, where these modes are enforced.
+	if runtime.GOOS != "windows" {
+		if st.Mode().Perm() != 0o600 {
+			t.Fatalf("mode %v", st.Mode().Perm())
+		}
+		dst, derr := os.Stat(filepath.Dir(path))
+		if derr != nil || dst.Mode().Perm() != 0o700 {
+			t.Fatalf("dir mode %v err %v", dst, derr)
+		}
 	}
 	rec.Append(decision(ActionRevoke, sha, "wycofanie", cands))
 	if err := Save(path, rec); err != nil {
@@ -187,17 +196,20 @@ func TestSaveIsAtomicPrivateAndKeepsHistory(t *testing.T) {
 			t.Fatalf("temp file left behind: %s", entry.Name())
 		}
 	}
-	if err := os.Chmod(filepath.Dir(path), 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(filepath.Dir(path), 0o700) })
 	rec.History[1].At = "2026-11-05T00:00:01Z"
 	rec.At = rec.History[1].At
-	if err := Save(path, rec); err == nil {
-		t.Fatal("save into a read-only directory must fail")
-	}
-	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
+	if runtime.GOOS != "windows" {
+		// A mode 0500 directory is a Unix check. Windows does not honor it.
+		if err := os.Chmod(filepath.Dir(path), 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(filepath.Dir(path), 0o700) })
+		if err := Save(path, rec); err == nil {
+			t.Fatal("save into a read-only directory must fail")
+		}
+		if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	again, err := Load(path)
 	if err != nil || again.Reason != "wycofanie" || len(again.History) != 2 {

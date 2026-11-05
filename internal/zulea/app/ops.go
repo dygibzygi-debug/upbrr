@@ -54,6 +54,9 @@ type ScanSummary struct {
 // TMDB read by id and the read-only upbrr duplicate search per release, with
 // delay between releases. Without releases it scans every OK freeze release.
 func (r *Runner) ScanPTT(ctx context.Context, releases []string, delay time.Duration) (ScanSummary, error) {
+	if delay > 0 && delay < 3*time.Second {
+		return ScanSummary{}, errors.New("scan-ptt: delay must be at least 3s")
+	}
 	if len(releases) == 0 {
 		all, err := r.okReleases()
 		if err != nil {
@@ -106,17 +109,30 @@ func (r *Runner) ScanPTT(ctx context.Context, releases []string, delay time.Dura
 		summary.Counts[result.Dupe]++
 		summary.Results = append(summary.Results, result)
 		sess.logger.Evidencef("zulea: scan release=%s chain=%s dupe=%s", rel, result.Chain, result.Dupe)
+		if result.Dupe == pttdupe.StatusFailed {
+			if werr := r.writeScanReport(&summary); werr != nil {
+				return summary, werr
+			}
+			return summary, fmt.Errorf("scan-ptt: przerwano po błędzie API, bez ponawiania: %s", result.Message)
+		}
 	}
-	stamp := time.Now().UTC().Format("20060102-150405")
-	path, err := r.writeJSON("reports", "scan-"+stamp+".json", summary)
-	if err != nil {
-		return summary, err
-	}
-	summary.ReportPath = path
-	if err := r.writeText("reports", "scan-"+stamp+".md", ScanMarkdown(summary)); err != nil {
+	if err := r.writeScanReport(&summary); err != nil {
 		return summary, err
 	}
 	return summary, nil
+}
+
+func (r *Runner) writeScanReport(summary *ScanSummary) error {
+	stamp := time.Now().UTC().Format("20060102-150405")
+	path, err := r.writeJSON("reports", "scan-"+stamp+".json", summary)
+	if err != nil {
+		return err
+	}
+	summary.ReportPath = path
+	if err := r.writeText("reports", "scan-"+stamp+".md", ScanMarkdown(*summary)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *Runner) okReleases() ([]string, error) {
@@ -379,14 +395,16 @@ func (r *Runner) Seed(ctx context.Context, req SeedRequest, client seed.Client) 
 		return seed.Result{}, errors.New("seed: registered torrent must match the TM data and names (compare-torrent)")
 	}
 	if client == nil {
-		password := ""
-		if q.PasswordFile != "" {
-			if password, err = readKeyFile(q.PasswordFile); err != nil {
-				return seed.Result{}, fmt.Errorf("seed: qbittorrent password: %w", err)
-			}
+		password, perr := r.qbitPassword()
+		if perr != nil {
+			return seed.Result{}, fmt.Errorf("seed: qbittorrent password: %w", perr)
 		}
 		client = seed.NewQBit(q.Host, q.Username, password)
 	}
+	// comparison.Downloaded is the torrent file fetched from PTT. Its infohash
+	// includes the tracker's info rewrite (source and entropy) and is the hash
+	// qBittorrent uses. receipt.InfoHash is the TM hash and must not be used
+	// for the lookup: the existing torrent would be missed and added again.
 	res, err := seed.Run(ctx, client, seed.Request{
 		TorrentPath: receipt.RegisteredTorrent,
 		InfoHash:    comparison.Downloaded.InfoHash,
@@ -400,6 +418,12 @@ func (r *Runner) Seed(ctx context.Context, req SeedRequest, client seed.Client) 
 	})
 	if err != nil {
 		return res, fmt.Errorf("zulea: %w", err)
+	}
+	if res.SeedSource != "" {
+		receipt.SeedSource = res.SeedSource
+		if werr := writeReceipt(r.receiptPath(req.Release), receipt, false); werr != nil {
+			return res, werr
+		}
 	}
 	return res, nil
 }
@@ -445,21 +469,17 @@ func (r *Runner) StartSeedVerified(ctx context.Context, release string) (seed.Re
 	if err != nil {
 		return seed.Result{}, fmt.Errorf("seed: registered torrent: %w", err)
 	}
-	hash, err := tm.InfoHashOf(data)
+	// Describe hashes the raw info bytes of the PTT torrent, including the
+	// tracker's source and entropy. That is the qBittorrent infohash.
+	desc, err := tm.Describe(data)
 	if err != nil {
-		hashDesc, derr := tm.Describe(data)
-		if derr != nil {
-			return seed.Result{}, fmt.Errorf("seed: registered torrent: %w", err)
-		}
-		hash = hashDesc.InfoHash
+		return seed.Result{}, fmt.Errorf("seed: registered torrent: %w", err)
 	}
-	password := ""
-	if q.PasswordFile != "" {
-		if password, err = readKeyFile(q.PasswordFile); err != nil {
-			return seed.Result{}, fmt.Errorf("seed: qbittorrent password: %w", err)
-		}
+	password, err := r.qbitPassword()
+	if err != nil {
+		return seed.Result{}, fmt.Errorf("seed: qbittorrent password: %w", err)
 	}
-	res, err := seed.StartVerified(ctx, seed.NewQBit(q.Host, q.Username, password), hash)
+	res, err := seed.StartVerified(ctx, seed.NewQBit(q.Host, q.Username, password), desc.InfoHash)
 	if err != nil {
 		return res, fmt.Errorf("zulea: %w", err)
 	}

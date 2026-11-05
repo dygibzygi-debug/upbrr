@@ -21,7 +21,7 @@ import (
 	"github.com/autobrr/upbrr/internal/zulea/zuleatest"
 )
 
-const acceptReason = "REMUX vs Encode x264 (#7); regulamin testowy"
+const acceptReason = "REMUX obok enkodu tej samej rozdzielczości, decyzja operatora"
 
 func blockNetwork(t *testing.T) func() {
 	t.Helper()

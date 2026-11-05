@@ -117,6 +117,14 @@ The config is JSON, mode `0600`, and unknown fields are rejected. It holds
   "disk_check_mode": "path",
   "mediainfo": {"source": "cli", "binary": "/usr/bin/mediainfo"},
   "trackers": ["PTT"],
+  "qbittorrent": {
+    "host": "http://qbittorrent.invalid:8080",
+    "username": "uploader",
+    "password_file": "/secrets/qbittorrent.password",
+    "save_path": "/data/library",
+    "category": "examples"
+  },
+  "nightly": {"scan_ptt": false},
   "ptt": {
     "api_key_file": "/srv/zulea-upbrr/secrets/ptt.key",
     "anonymous": false,
@@ -141,6 +149,10 @@ The config is JSON, mode `0600`, and unknown fields are rejected. It holds
   Once set, any mismatch is a STOP.
 - `api_key_file` is optional for dry-run. The key is never transmitted in
   dry-run.
+- `qbittorrent` is optional. When set, `password_file` is a mode `0600` file
+  the operator creates (it is not in this repository). `save_path` is the
+  library path **as the qBittorrent container sees it**, not a path computed
+  from `category`. `nightly.scan_ptt` defaults to false.
 
 ### Disk check (W-2)
 
@@ -243,7 +255,8 @@ Receipts are always replaced atomically (temporary file, sync, rename).
 canary gate and `queue`. It does not search and it does not upload. It reads
 the newest `scan-ptt` or `plan` report for the release (by file mtime) and
 requires an interactive terminal. `--reason` is mandatory and at most 500
-bytes. There is no `--force`.
+bytes. The text is whatever the operator writes; the tool does not check it
+against tracker rules. There is no `--force`.
 
 Before the operator types anything, the command shows our release (type,
 resolution, size), every candidate (id, name, type, resolution, size,
@@ -280,8 +293,18 @@ not written to the log.
   While any accepted upload is not `APPROVED`, `queue` returns nothing and the
   canary gate stays closed. For approved torrents it also compares the PTT
   infohash with the registered torrent.
-- **Seeding state.** `seed-status` reads qBittorrent only: `SEEDING`,
+- **Seeding.** `seed` uploads the registered PTT torrent through the WebAPI
+  (it is not copied outside `work_dir`). The torrent is added stopped, with
+  `autoTMM=false`, the configured `save_path` and no completion action. A
+  recheck runs, and `--start` starts it only at 100%. If qBittorrent already
+  has that torrent, matched by the **PTT** infohash (not the TM infohash on
+  the receipt), nothing is added or edited and the receipt records
+  `seed_source: manual`. `seed-status` only reads qBittorrent: `SEEDING`,
   `STOPPED_100`, `CHECKING`, `INCOMPLETE`, `ERROR`, `ABSENT`, `UNKNOWN`.
+  `check-config` logs in, reads the WebUI version, checks that `save_path`
+  exists on the qBittorrent side and warns when default automatic torrent
+  management is on. That check needs a network path to the WebUI; the other
+  commands keep the network flags they already have.
 - **History.** `history` writes all receipts as CSV (default
   `work_dir/history/zulea-upbrr-history.csv`, written atomically).
 - **Notifications.** Optional `notifications` config section with
@@ -289,9 +312,13 @@ not written to the log.
   Secrets are read from `0600` files. Messages never mention people
   (`allowed_mentions` is empty), and errors never contain the URL or token.
 - **Nightly run.** `scripts/zulea/docker/nightly.sh` is a template for the
-  Unraid User Scripts plugin: sync-inputs, check, weekly scan-ptt, ptt-status,
-  seed-status, history and summary. Exit code 3 means "needs attention" and
-  does not stop the run. It never uploads or seeds.
+  Unraid User Scripts plugin: sync-inputs, check, optional scan-ptt,
+  ptt-status, seed-status, history and summary. `nightly.scan_ptt` is off
+  unless the operator sets it. The scan waits at least 3s and stops on the
+  first API error. The notification level is a warning only when something
+  changed since the previous run (see `work_dir/nightly/state.json`). Standing
+  STOPs are listed without a warning. It never uploads, seeds or accepts
+  duplicates.
 
 ## Upstream updates
 

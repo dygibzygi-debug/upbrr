@@ -201,7 +201,7 @@ func (r *Runner) canaryGate(release string, plan *pttplan.Plan, dupeResult *pttd
 		blockers = append(blockers, block)
 	}
 	if r.Config.PTT.PersonalRelease == nil {
-		blockers = append(blockers, "D-5: ptt.personal_release nierozstrzygnięte (sprawdź regulamin PTT)")
+		blockers = append(blockers, "D-5: ptt.personal_release nierozstrzygnięte")
 	}
 	if !r.Config.PTT.ModQueue {
 		blockers = append(blockers, "D-5: canary wymaga ptt.mod_queue=true")

@@ -12,13 +12,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/autobrr/upbrr/internal/zulea/pttdupe"
 	"github.com/autobrr/upbrr/internal/zulea/pttplan"
 	"github.com/autobrr/upbrr/internal/zulea/seed"
 	"github.com/autobrr/upbrr/internal/zulea/tm"
+	"github.com/autobrr/upbrr/internal/zulea/tmdb"
 	"github.com/autobrr/upbrr/internal/zulea/zuleatest"
 )
 
@@ -113,6 +116,31 @@ func TestCanaryGateBlocksWhileAwaitingApproval(t *testing.T) {
 	}
 }
 
+type errMovies struct{}
+
+func (errMovies) Movie(context.Context, string) (tmdb.Movie, error) {
+	return tmdb.Movie{}, errors.New("tmdb down")
+}
+
+func TestScanPTTStopsOnAPIError(t *testing.T) {
+	_, _, runner := uploadSetup(t)
+	runner.Movies = errMovies{}
+	summary, err := runner.ScanPTT(context.Background(), []string{zuleatest.Release, zuleatest.Release}, 0)
+	if err == nil || len(summary.Results) != 1 || summary.Results[0].Dupe != pttdupe.StatusFailed {
+		t.Fatalf("scan must stop on the first API error: %+v %v", summary.Results, err)
+	}
+	if !strings.Contains(err.Error(), "bez ponawiania") {
+		t.Fatalf("error %v", err)
+	}
+}
+
+func TestScanPTTRejectsShortDelay(t *testing.T) {
+	_, err := (&Runner{}).ScanPTT(context.Background(), nil, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "3s") {
+		t.Fatal(err)
+	}
+}
+
 func TestScanPTTReportsDuplicate(t *testing.T) {
 	_, fake, runner := uploadSetup(t)
 	fake.filterRows = sameSlotRow
@@ -157,18 +185,29 @@ func TestVerifyUploadedFindsExactTitle(t *testing.T) {
 }
 
 type recordingQB struct {
-	added   string
-	options map[string]string
-	started bool
-	present *seed.Torrent
+	added    string
+	options  map[string]string
+	started  bool
+	present  *seed.Torrent
+	byHash   map[string]*seed.Torrent
+	lookups  []string
+	failAdd  bool
+	rechecks int
 }
 
 func (q *recordingQB) Login(context.Context) error { return nil }
-func (q *recordingQB) Find(context.Context, string) (*seed.Torrent, error) {
+func (q *recordingQB) Find(_ context.Context, hash string) (*seed.Torrent, error) {
+	q.lookups = append(q.lookups, hash)
+	if q.byHash != nil {
+		return q.byHash[hash], nil
+	}
 	return q.present, nil
 }
 func (q *recordingQB) Add(_ context.Context, path string, opts map[string]string) error {
 	q.added, q.options = path, opts
+	if q.failAdd {
+		return errors.New("add refused in test")
+	}
 	q.present = &seed.Torrent{
 		Name:     zuleatest.Release,
 		State:    "stoppedUP",
@@ -176,7 +215,7 @@ func (q *recordingQB) Add(_ context.Context, path string, opts map[string]string
 	}
 	return nil
 }
-func (q *recordingQB) Recheck(context.Context, string) error { return nil }
+func (q *recordingQB) Recheck(context.Context, string) error { q.rechecks++; return nil }
 func (q *recordingQB) Start(context.Context, string) error   { q.started = true; return nil }
 
 func TestSeedAfterAcceptedUpload(t *testing.T) {
@@ -212,8 +251,77 @@ func TestSeedAfterAcceptedUpload(t *testing.T) {
 	if qb.added != result.Receipt.RegisteredTorrent || qb.options["savepath"] != "/data/library" || qb.options["stopped"] != "true" {
 		t.Fatalf("added %q options %+v", qb.added, qb.options)
 	}
-	if !res.Added || !res.Started || !qb.started || res.Hash != result.Comparison.Downloaded.InfoHash {
+	if !res.Added || !res.Started || !qb.started || res.Hash != result.Comparison.Downloaded.InfoHash || res.SeedSource != seed.SeedSourceCLI {
 		t.Fatalf("seed %+v", res)
+	}
+	if res.Hash == result.Receipt.InfoHash {
+		t.Fatal("seed must not use the TM infohash")
+	}
+	receipt, err := runner.readReceipt(zuleatest.Release)
+	if err != nil || receipt.SeedSource != seed.SeedSourceCLI {
+		t.Fatalf("receipt seed source %+v %v", receipt, err)
+	}
+}
+
+func TestSeedMatchesPTTInfoHashNotTM(t *testing.T) {
+	_, _, runner := uploadSetup(t)
+	fp := dryRunFingerprint(t, runner)
+	result, err := runner.Upload(context.Background(), UploadRequest{
+		Release:     zuleatest.Release,
+		Fingerprint: fp,
+		Preview:     io.Discard,
+		Confirm:     typed(ConfirmationPhrase(fp)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pttHash := result.Comparison.Downloaded.InfoHash
+	tmHash := result.Receipt.InfoHash
+	if pttHash == "" || pttHash == tmHash || !result.Comparison.InfoHashChanged {
+		t.Fatalf("PTT infohash %s must differ from TM %s", pttHash, tmHash)
+	}
+	if !slices.Contains(result.Comparison.Downloaded.InfoKeys, "source") || !slices.Contains(result.Comparison.Downloaded.InfoKeys, "entropy") {
+		t.Fatalf("downloaded info keys %v", result.Comparison.Downloaded.InfoKeys)
+	}
+	runner.Config.QBittorrent = &QBitConfig{
+		Host:     "http://qbittorrent.invalid",
+		SavePath: "/data/library",
+		Category: "examples",
+	}
+	present := &seed.Torrent{
+		Hash:     pttHash,
+		Name:     zuleatest.Release,
+		State:    "uploading",
+		Progress: 1,
+		SavePath: "/data/library",
+		Category: "kept",
+	}
+	qb := &recordingQB{byHash: map[string]*seed.Torrent{pttHash: present}}
+	res, err := runner.Seed(context.Background(), SeedRequest{Release: zuleatest.Release, Start: true}, qb)
+	if err != nil || res.Added || !res.AlreadyExists || res.SeedSource != seed.SeedSourceManual || qb.added != "" || qb.rechecks != 0 || qb.started {
+		t.Fatalf("existing PTT torrent must not be added again: %+v %v lookups=%v", res, err, qb.lookups)
+	}
+	if len(qb.lookups) != 1 || qb.lookups[0] != pttHash {
+		t.Fatalf("lookup must be the PTT infohash, not the TM one: %v tm=%s", qb.lookups, tmHash)
+	}
+	if res.SavePath != "/data/library" || res.Category != "kept" {
+		t.Fatalf("path and category must stay as qBittorrent has them: %+v", res)
+	}
+	receipt, err := runner.readReceipt(zuleatest.Release)
+	if err != nil || receipt.SeedSource != seed.SeedSourceManual || receipt.InfoHash != tmHash {
+		t.Fatalf("receipt %+v %v", receipt, err)
+	}
+	data, err := os.ReadFile(runner.receiptPath(zuleatest.Release))
+	if err != nil || !strings.Contains(string(data), `"seed_source": "manual"`) {
+		t.Fatalf("receipt json %s %v", data, err)
+	}
+	// A qBittorrent entry under the TM hash is a different torrent.
+	qb = &recordingQB{byHash: map[string]*seed.Torrent{tmHash: present}, failAdd: true}
+	if _, err = runner.Seed(context.Background(), SeedRequest{Release: zuleatest.Release}, qb); err == nil || qb.added == "" {
+		t.Fatal("TM infohash must not count as the torrent already in qBittorrent")
+	}
+	if len(qb.lookups) == 0 || qb.lookups[0] != pttHash || slices.Contains(qb.lookups, tmHash) {
+		t.Fatalf("lookups %v ptt=%s tm=%s", qb.lookups, pttHash, tmHash)
 	}
 }
 

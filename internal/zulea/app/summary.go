@@ -28,16 +28,30 @@ type Summary struct {
 // BuildSummary condenses the latest check and scan reports, receipts,
 // moderation and (when client is non-nil) seeding state.
 func (r *Runner) BuildSummary(ctx context.Context, client seed.Client) (Summary, error) {
+	now := time.Now().UTC()
 	var lines []string
 	attention := false
-	lines = append(lines, "Zulea uploader — "+time.Now().UTC().Format("2006-01-02 15:04 UTC"))
+	lines = append(lines, "Zulea uploader — "+now.Format("2006-01-02 15:04 UTC"))
 	dir := filepath.Join(r.Config.WorkDir, "reports")
+	var checkResults []CheckResult
+	checkLoaded := false
 	if path, err := latestReport(dir, "check-", ".json"); err == nil {
 		var c CheckSummary
 		if readJSON(path, &c) == nil {
+			checkLoaded = true
+			checkResults = c.Results
 			lines = append(lines, fmt.Sprintf("Łańcuch: OK=%d STOP=%d (pominięte %d)", c.OK, c.Stop, c.Skipped))
-			attention = attention || c.Stop > 0
 		}
+	}
+	prev, hasPrev, err := r.readNightlyState()
+	if err != nil {
+		return Summary{}, err
+	}
+	if checkLoaded {
+		delta, chainAttention, nextOK := nightlyChainDelta(prev, hasPrev, checkResults)
+		lines = append(lines, delta...)
+		attention = attention || chainAttention
+		prev.OK = nextOK
 	}
 	if path, err := latestReport(dir, "scan-", ".json"); err == nil {
 		var s ScanSummary
@@ -52,7 +66,6 @@ func (r *Runner) BuildSummary(ctx context.Context, client seed.Client) (Summary,
 				parts = append(parts, fmt.Sprintf("%s=%d", k, s.Counts[k]))
 			}
 			lines = append(lines, "PTT: "+strings.Join(parts, " "))
-			attention = attention || s.Counts["REVIEW"] > 0 || s.Counts["FAILED"] > 0
 		}
 	}
 	receipts, err := r.Receipts()
@@ -62,32 +75,46 @@ func (r *Runner) BuildSummary(ctx context.Context, client seed.Client) (Summary,
 	states := map[string]int{}
 	for _, rc := range receipts {
 		states[rc.State]++
+		if why := nightlyReceiptAlert(rc, now); why != "" {
+			attention = true
+			lines = append(lines, fmt.Sprintf("Pokwitowanie %s: %s", rc.Release, why))
+		}
 	}
 	lines = append(lines, fmt.Sprintf("Uploady: accepted=%d rejected=%d uncertain=%d attempted=%d",
 		states[ReceiptAccepted], states[ReceiptRejected], states[ReceiptUncertain], states[ReceiptAttempted]))
-	attention = attention || states[ReceiptUncertain] > 0 || states[ReceiptAttempted] > 0 || states[ReceiptRejected] > 0
-	if blocked, err := r.queueBlockers(); err != nil || len(blocked) > 0 {
-		lines = append(lines, fmt.Sprintf("Kolejka wstrzymana: %d pokwitowań wymaga uwagi (receipts, ptt-status, resolve)", len(blocked)))
+	if blocked, berr := r.queueBlockers(); berr != nil {
 		attention = true
+		lines = append(lines, "Pokwitowania: nie można odczytać listy")
+	} else if len(blocked) > 0 {
+		lines = append(lines, fmt.Sprintf("Kolejka wstrzymana: %d pokwitowań wymaga uwagi (receipts, ptt-status, resolve)", len(blocked)))
 	}
-	if entries, _, err := r.Queue(); err == nil {
+	if entries, _, qerr := r.Queue(); qerr == nil {
 		lines = append(lines, fmt.Sprintf("Kolejka: %d wydań gotowych", len(entries)))
 	}
 	if client != nil {
-		results, err := r.SeedStatus(ctx, client)
-		if err != nil {
-			lines = append(lines, "Seed: nie udało się sprawdzić qBittorrenta")
+		results, serr := r.SeedStatus(ctx, client)
+		if serr != nil {
+			lines = append(lines, "Seed: błąd seed-status")
 			attention = true
 		} else {
-			bad := 0
+			bad, seedErr := 0, 0
 			for _, s := range results {
 				if s.Seed != SeedSeeding {
 					bad++
 				}
+				if s.Seed == SeedError || s.Error != "" {
+					seedErr++
+				}
 			}
 			lines = append(lines, fmt.Sprintf("Seed: %d/%d seeduje", len(results)-bad, len(results)))
-			attention = attention || bad > 0
+			if seedErr > 0 {
+				attention = true
+				lines = append(lines, fmt.Sprintf("Seed: błąd przy %d wydaniach", seedErr))
+			}
 		}
+	}
+	if err := r.writeNightlyState(prev); err != nil {
+		return Summary{}, err
 	}
 	if attention {
 		lines = append(lines, "Wymaga uwagi — szczegóły w raportach work/reports.")

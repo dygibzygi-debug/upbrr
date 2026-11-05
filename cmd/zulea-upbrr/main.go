@@ -56,10 +56,11 @@ Użycie:
   zulea-upbrr check --config FILE [--release REL ... | --list FILE]   (cały łańcuch, bez sieci; domyślnie wszystkie OK)
   zulea-upbrr verify-identity --config FILE --release REL           (diagnostyka W-3: ino/size/mtime, dysk)
   zulea-upbrr receipts --config FILE                                (pokwitowania wysyłek)
-  zulea-upbrr scan-ptt --config FILE [--release REL ...] [--delay 3s] (co już jest na PTT; tylko odczyt)
+  zulea-upbrr scan-ptt --config FILE [--release REL ...] [--delay 3s] (co już jest na PTT; tylko odczyt; odstęp co najmniej 3s)
+  zulea-upbrr nightly-scan-enabled --config FILE                     (czy nocny scan-ptt jest włączony; domyślnie nie)
   zulea-upbrr queue --config FILE [--limit N]                       (kolejne wolne wydania wg ostatniego skanu)
   zulea-upbrr verify-uploaded --config FILE --release REL [--ptt-id ID] (sprawdzenie dawnego ręcznego uploadu)
-  zulea-upbrr seed --config FILE --release REL [--wait 30m] [--start] (qBittorrent: zatrzymany, pełny recheck)
+  zulea-upbrr seed --config FILE --release REL [--wait 30m] [--start] (qBittorrent: zatrzymany, autoTMM=false, recheck, start tylko przy 100%)
   zulea-upbrr seed --config FILE --release REL --start-verified       (uruchom seed tylko przy 100%)
   zulea-upbrr sync-inputs --dest DIR --freeze F --freeze-sha SHA [--runs DIR] [--titles F] [--owner 99:100]
   zulea-upbrr ptt-taxonomy --options FILE [--apply CONFIG]            (ID z formularza PTT -> konfiguracja)
@@ -99,7 +100,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "plan", "dry-run":
 		return runPlan(ctx, args[1:], stdout, stderr)
 	case "check-config":
-		return runCheckConfig(args[1:], stdout, stderr)
+		return runCheckConfig(ctx, args[1:], stdout, stderr)
 	case "names":
 		return runNames(args[1:], stdout, stderr)
 	case "version":
@@ -117,6 +118,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runReceipts(args[1:], stdout, stderr)
 	case "scan-ptt":
 		return runScan(ctx, args[1:], stdout, stderr)
+	case "nightly-scan-enabled":
+		return runNightlyScanEnabled(args[1:], stdout, stderr)
 	case "queue":
 		return runQueue(args[1:], stdout, stderr)
 	case "verify-uploaded":
@@ -201,7 +204,7 @@ func runPlan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-func runCheckConfig(args []string, stdout, stderr io.Writer) int {
+func runCheckConfig(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("check-config", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", "", "plik konfiguracji JSON (0600)")
@@ -218,11 +221,42 @@ func runCheckConfig(args []string, stdout, stderr io.Writer) int {
 	if cfg.PTT.PersonalRelease != nil {
 		personal = strconv.FormatBool(*cfg.PTT.PersonalRelease)
 	}
+	scan := "wyłączony"
+	if cfg.NightlyScanEnabled() {
+		scan = "włączony"
+	}
 	fmt.Fprintf(stdout, "konfiguracja poprawna\n  trackery: %s\n  dysk (W-2): %s, tryb %s\n  MediaInfo (D-6): %s\n"+
-		"  ID PTT potwierdzone (W-1): %t\n  personal_release (D-5): %s\n  mod_queue (D-5): %t\n",
+		"  ID PTT potwierdzone (W-1): %t\n  personal_release (D-5): %s\n  mod_queue (D-5): %t\n  nocny scan-ptt: %s\n",
 		strings.Join(cfg.Trackers, ","), cfg.PhysicalDisk, cfg.DiskCheckMode, cfg.MediaInfo.Source,
-		cfg.PTT.Taxonomy != nil, personal, cfg.PTT.ModQueue)
+		cfg.PTT.Taxonomy != nil, personal, cfg.PTT.ModQueue, scan)
+	if cfg.QBittorrent == nil {
+		fmt.Fprintln(stdout, "  qBittorrent: nie skonfigurowano")
+		return exitOK
+	}
+	logger := app.NewLogger(stderr, false)
+	probe, err := (&app.Runner{Config: cfg, Logger: logger}).CheckQBit(ctx, nil)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr check-config: %s\n", logger.Sanitize(err.Error()))
+		return exitRuntime
+	}
+	fmt.Fprintf(stdout, "  qBittorrent: WebUI %s, save_path istnieje\n", probe.Version)
+	for _, warning := range probe.Warnings {
+		fmt.Fprintf(stdout, "OSTRZEŻENIE: %s\n", warning)
+	}
 	return exitOK
+}
+
+func runNightlyScanEnabled(args []string, stdout, stderr io.Writer) int {
+	cfg, ok := loadConfigFlag("nightly-scan-enabled", args, stderr, nil)
+	if !ok {
+		return exitUsage
+	}
+	if cfg.NightlyScanEnabled() {
+		fmt.Fprintln(stdout, "scan_ptt=true")
+		return exitOK
+	}
+	fmt.Fprintln(stdout, "scan_ptt=false")
+	return exitStop
 }
 
 func runNames(args []string, stdout, stderr io.Writer) int {
@@ -335,7 +369,7 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer, std
 		fmt.Fprintln(stdout, "UWAGA: brak potwierdzenia DANE_ZGODNE=TAK — nie dodawaj torrenta do klienta przed ręczną kontrolą")
 		return exitStop
 	}
-	fmt.Fprintf(stdout, "Następny krok (ręczny, jak dziś): dodaj %s do qBittorrenta z pełnym rechekiem; seed po 100%%.\n", result.Receipt.RegisteredTorrent)
+	fmt.Fprintf(stdout, "Następny krok: zulea-upbrr seed --release %s (torrent z PTT, zatrzymany, autoTMM=false, recheck; start tylko przy 100%%).\n", *release)
 	return exitOK
 }
 
@@ -556,18 +590,29 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	var releases multiFlag
 	var listPath string
 	delay := 3 * time.Second
-	cfg, ok := loadConfigFlag("scan-ptt", args, stderr, func(fs *flag.FlagSet) {
-		fs.Var(&releases, "release", "nazwa wydania (można powtarzać)")
-		fs.StringVar(&listPath, "list", "", "plik z listą wydań")
-		fs.DurationVar(&delay, "delay", delay, "odstęp między wydaniami (grzeczność wobec trackera)")
-	})
-	if !ok {
+	fs := flag.NewFlagSet("scan-ptt", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	configPath := fs.String("config", "", "plik konfiguracji JSON (0600)")
+	fs.Var(&releases, "release", "nazwa wydania (można powtarzać)")
+	fs.StringVar(&listPath, "list", "", "plik z listą wydań")
+	fs.DurationVar(&delay, "delay", delay, "odstęp między wydaniami (co najmniej 3s)")
+	if err := fs.Parse(args); err != nil || *configPath == "" || fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "zulea-upbrr scan-ptt: wymagane --config")
+		return exitUsage
+	}
+	if delay < 3*time.Second {
+		fmt.Fprintln(stderr, "zulea-upbrr scan-ptt: --delay musi wynosić co najmniej 3s")
+		return exitUsage
+	}
+	cfg, err := app.LoadConfig(*configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr scan-ptt: %v\n", err)
 		return exitUsage
 	}
 	if listPath != "" {
-		listed, err := readList(listPath)
-		if err != nil {
-			fmt.Fprintf(stderr, "zulea-upbrr scan-ptt: %v\n", err)
+		listed, lerr := readList(listPath)
+		if lerr != nil {
+			fmt.Fprintf(stderr, "zulea-upbrr scan-ptt: %v\n", lerr)
 			return exitUsage
 		}
 		releases = append(releases, listed...)
@@ -576,9 +621,10 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	summary, err := (&app.Runner{Config: cfg, Logger: logger}).ScanPTT(ctx, releases, delay)
 	if err != nil {
 		fmt.Fprintf(stderr, "zulea-upbrr scan-ptt: %s\n", logger.Sanitize(err.Error()))
-		if len(summary.Results) == 0 {
-			return exitRuntime
+		if len(summary.Results) > 0 {
+			app.RenderScan(stdout, summary)
 		}
+		return exitRuntime
 	}
 	app.RenderScan(stdout, summary)
 	return exitOK
@@ -647,7 +693,8 @@ func runSeed(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		return exitUsage
 	}
-	runner := &app.Runner{Config: cfg}
+	logger := app.NewLogger(stderr, false)
+	runner := &app.Runner{Config: cfg, Logger: logger}
 	var res seed.Result
 	var err error
 	if startVerified {
@@ -660,7 +707,7 @@ func runSeed(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}, nil)
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "zulea-upbrr seed: %v\n", err)
+		fmt.Fprintf(stderr, "zulea-upbrr seed: %s\n", logger.Sanitize(err.Error()))
 		return exitRuntime
 	}
 	fmt.Fprintf(stdout, "infohash %s; dodano=%t; był=%t; stan=%s; postęp=%.2f%%; seed=%t\n%s\n",
@@ -779,9 +826,10 @@ func runSeedStatus(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if !ok {
 		return exitUsage
 	}
-	results, err := (&app.Runner{Config: cfg}).SeedStatus(ctx, nil)
+	logger := app.NewLogger(stderr, false)
+	results, err := (&app.Runner{Config: cfg, Logger: logger}).SeedStatus(ctx, nil)
 	if err != nil {
-		fmt.Fprintf(stderr, "zulea-upbrr seed-status: %v\n", err)
+		fmt.Fprintf(stderr, "zulea-upbrr seed-status: %s\n", logger.Sanitize(err.Error()))
 		return exitRuntime
 	}
 	app.RenderSeedStatus(stdout, results)
@@ -819,19 +867,20 @@ func runSummary(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	if !ok {
 		return exitUsage
 	}
-	runner := &app.Runner{Config: cfg}
+	logger := app.NewLogger(stderr, false)
+	runner := &app.Runner{Config: cfg, Logger: logger}
 	var client seed.Client
 	if withSeed && cfg.QBittorrent != nil {
 		c, err := runner.QBitClient()
 		if err != nil {
-			fmt.Fprintf(stderr, "zulea-upbrr summary: %v\n", err)
+			fmt.Fprintf(stderr, "zulea-upbrr summary: %s\n", logger.Sanitize(err.Error()))
 			return exitRuntime
 		}
 		client = c
 	}
 	summary, err := runner.BuildSummary(ctx, client)
 	if err != nil {
-		fmt.Fprintf(stderr, "zulea-upbrr summary: %v\n", err)
+		fmt.Fprintf(stderr, "zulea-upbrr summary: %s\n", logger.Sanitize(err.Error()))
 		return exitRuntime
 	}
 	fmt.Fprintln(stdout, summary.Text)
