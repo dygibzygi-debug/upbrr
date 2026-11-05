@@ -107,8 +107,9 @@ func (f *fakeUploadPTT) handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// trackerInfo returns the uploaded info dictionary with source=PTT appended
-// ("source" sorts after "private", the last TM key), as Unit3D does on accept.
+// trackerInfo returns the uploaded info dictionary with the keys the tracker
+// writes into info on accept: source=PTT and an entropy value. Both change
+// the infohash, so the torrent qBittorrent seeds is not the TM torrent.
 func trackerInfo(t *testing.T, uploaded []byte) []byte {
 	t.Helper()
 	const marker = "4:info"
@@ -119,7 +120,7 @@ func trackerInfo(t *testing.T, uploaded []byte) []byte {
 	}
 	info := uploaded[idx+len(marker) : len(uploaded)-1]
 	out := append([]byte(nil), info[:len(info)-1]...)
-	out = append(out, "6:source3:PTT"...)
+	out = append(out, "7:entropy4:test6:source3:PTT"...)
 	return append(out, 'e')
 }
 

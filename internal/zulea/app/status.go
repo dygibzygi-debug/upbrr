@@ -61,19 +61,80 @@ func classifySeed(t *seed.Torrent) string {
 // QBitClient returns the configured qBittorrent client (password from a 0600 file).
 func (r *Runner) QBitClient() (seed.Client, error) { return r.qbitClient() }
 
+func (r *Runner) qbitPassword() (string, error) {
+	q := r.Config.QBittorrent
+	if q == nil || strings.TrimSpace(q.PasswordFile) == "" {
+		return "", errors.New("qbittorrent password file is not configured")
+	}
+	password, err := readKeyFile(q.PasswordFile)
+	if err != nil {
+		return "", err
+	}
+	if r.Logger != nil {
+		r.Logger.AddSecret(password)
+	}
+	return password, nil
+}
+
 func (r *Runner) qbitClient() (seed.Client, error) {
 	q := r.Config.QBittorrent
 	if q == nil {
 		return nil, errors.New("qbittorrent is not configured")
 	}
-	password := ""
-	if q.PasswordFile != "" {
-		var err error
-		if password, err = readKeyFile(q.PasswordFile); err != nil {
-			return nil, fmt.Errorf("qbittorrent password: %w", err)
-		}
+	password, err := r.qbitPassword()
+	if err != nil {
+		return nil, fmt.Errorf("qbittorrent password: %w", err)
 	}
 	return seed.NewQBit(q.Host, q.Username, password), nil
+}
+
+// ConfigProbe is the read-only qBittorrent result of check-config.
+type ConfigProbe struct {
+	Version  string
+	Warnings []string
+}
+
+// CheckQBit logs in, reads the WebUI version, checks that the configured
+// save path exists on the qBittorrent side, and warns when default automatic
+// torrent management is enabled. It does not add or reconfigure torrents.
+// A nil web uses the configured client.
+func (r *Runner) CheckQBit(ctx context.Context, web seed.WebUI) (ConfigProbe, error) {
+	q := r.Config.QBittorrent
+	if q == nil {
+		return ConfigProbe{}, errors.New("qbittorrent is not configured")
+	}
+	if _, err := r.qbitPassword(); err != nil {
+		return ConfigProbe{}, fmt.Errorf("qbittorrent password: %w", err)
+	}
+	if web == nil {
+		client, err := r.qbitClient()
+		if err != nil {
+			return ConfigProbe{}, err
+		}
+		inspected, ok := client.(seed.WebUI)
+		if !ok {
+			return ConfigProbe{}, errors.New("qbittorrent client cannot be inspected")
+		}
+		web = inspected
+	}
+	if err := web.Login(ctx); err != nil {
+		return ConfigProbe{}, fmt.Errorf("qbittorrent login: %w", err)
+	}
+	report, err := web.Inspect(ctx, q.SavePath)
+	if err != nil {
+		return ConfigProbe{}, fmt.Errorf("qbittorrent inspect: %w", err)
+	}
+	if !report.SavePathExists {
+		return ConfigProbe{}, fmt.Errorf("qbittorrent nie widzi save_path %q (ścieżka z punktu widzenia kontenera qBittorrent)", q.SavePath)
+	}
+	probe := ConfigProbe{Version: report.Version}
+	if report.AutoTMM {
+		probe.Warnings = append(
+			probe.Warnings,
+			"qBittorrent ma włączone domyślne automatyczne zarządzanie torrentem (auto_tmm_enabled). Przy włączonym ATM zmiana kategorii może przenieść pliki. seed wysyła autoTMM=false i jawny save_path.",
+		)
+	}
+	return probe, nil
 }
 
 // SeedStatus reports, read only, the qBittorrent state of every accepted upload.

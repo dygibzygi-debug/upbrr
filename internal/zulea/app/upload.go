@@ -45,11 +45,17 @@ type Receipt struct {
 	Release     string `json:"release"`
 	Tracker     string `json:"tracker"`
 	Fingerprint string `json:"fingerprint"`
-	InfoHash    string `json:"tm_info_hash"`
-	State       string `json:"state"`
-	Message     string `json:"message,omitempty"`
-	TorrentID   string `json:"torrent_id,omitempty"`
-	TorrentURL  string `json:"torrent_url,omitempty"`
+	// InfoHash is the TM torrent v1 infohash. PTT rewrites the info dictionary
+	// (source and entropy), so the copy that qBittorrent actually seeds has a
+	// different infohash. Seed matches that registered file, never this field.
+	InfoHash string `json:"tm_info_hash"`
+	// SeedSource is "manual" when qBittorrent already had the registered
+	// torrent (path and category left unchanged) or "cli" when seed added it.
+	SeedSource string `json:"seed_source,omitempty"`
+	State      string `json:"state"`
+	Message    string `json:"message,omitempty"`
+	TorrentID  string `json:"torrent_id,omitempty"`
+	TorrentURL string `json:"torrent_url,omitempty"`
 	// RegisteredTorrent is the torrent downloaded from the tracker (0600, work_dir).
 	RegisteredTorrent string `json:"registered_torrent,omitempty"`
 	DataMatch         *bool  `json:"data_match,omitempty"`

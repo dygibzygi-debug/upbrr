@@ -37,8 +37,8 @@ func TestBuildSummary(t *testing.T) {
 	}
 	qb := &recordingQB{present: &seed.Torrent{State: "pausedDL", Progress: 0.5}}
 	s, err = runner.BuildSummary(context.Background(), qb)
-	if err != nil || !s.Attention || !strings.Contains(s.Text, "Kolejka wstrzymana: 1 ") || !strings.Contains(s.Text, "Seed: 0/1") {
-		t.Fatalf("summary after upload %+v %v", s, err)
+	if err != nil || s.Attention || !strings.Contains(s.Text, "Kolejka wstrzymana: 1 ") || !strings.Contains(s.Text, "Seed: 0/1") {
+		t.Fatalf("fresh accepted upload must not warn yet: %+v %v", s, err)
 	}
 	for _, secret := range []string{pttKey, tmdbKey, zuleatest.PasskeySentinel} {
 		if strings.Contains(s.Text, secret) {

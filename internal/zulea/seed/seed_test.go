@@ -64,11 +64,13 @@ func req(start bool) Request {
 
 func TestRunAddsStoppedRechecksAndStartsOnlyAt100(t *testing.T) {
 	qb := &fakeQB{states: []Torrent{{State: "checkingUP", Progress: 0.4}, {State: "stoppedUP", Progress: 1}}}
-	res, err := Run(context.Background(), qb, req(true))
+	request := req(true)
+	request.Category = "examples"
+	res, err := Run(context.Background(), qb, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.Added || !qb.rechecked || !qb.started || !res.Started {
+	if !res.Added || !qb.rechecked || !qb.started || !res.Started || res.SeedSource != SeedSourceCLI {
 		t.Fatalf("result %+v", res)
 	}
 	for k, v := range map[string]string{
@@ -77,10 +79,14 @@ func TestRunAddsStoppedRechecksAndStartsOnlyAt100(t *testing.T) {
 		"skip_checking": "false",
 		"savepath":      "/data/library",
 		"autoTMM":       "false",
+		"category":      "examples",
 	} {
 		if qb.added[k] != v {
 			t.Errorf("option %s=%q want %q", k, qb.added[k], v)
 		}
+	}
+	if qb.added["savepath"] == "/data/library/examples" {
+		t.Fatal("save path must not be derived from the category")
 	}
 }
 
@@ -108,10 +114,17 @@ func TestRunLeavesExistingTorrentUntouched(t *testing.T) {
 		Name:     "Example-Zulea",
 		State:    "uploading",
 		Progress: 1,
+		SavePath: "/other/library",
+		Category: "kept",
 	}}
-	res, err := Run(context.Background(), qb, req(true))
+	request := req(true)
+	request.Category = "examples"
+	res, err := Run(context.Background(), qb, request)
 	if err != nil || !res.AlreadyExists || qb.added != nil || qb.rechecked || qb.started {
 		t.Fatalf("existing torrent must be left alone: %+v %v", res, err)
+	}
+	if res.SeedSource != SeedSourceManual || res.SavePath != "/other/library" || res.Category != "kept" {
+		t.Fatalf("existing path and category must be reported unchanged: %+v", res)
 	}
 }
 

@@ -89,6 +89,10 @@ docker run --rm ... zulea-upbrr:local plan --config /secrets/zulea.json --releas
 docker run --rm -it ... zulea-upbrr:local upload --config /secrets/zulea.json --release <REL> --fingerprint <FP>
 # human duplicate acceptance: interactive terminal, no tracker traffic, no --force
 docker run --rm -it --network none ... zulea-upbrr:local dupe-accept --config /secrets/zulea.json --release <REL> --reason "..."
+# seed: needs a path to the qBittorrent WebUI; adds the PTT torrent stopped
+docker run --rm ... zulea-upbrr:local seed --config /secrets/zulea.json --release <REL>
+# check-config with a qbittorrent section also reads that WebUI
+docker run --rm ... zulea-upbrr:local check-config --config /secrets/zulea.json
 ```
 
 `dupe-accept` reads the newest `scan-ptt` or `plan` report under `/work`.
@@ -96,6 +100,16 @@ Nightly automation must not run it. The operator runbook in
 `scripts/zulea/deploy/v5/` changes only the image tag on the wrapper already
 deployed on the host. It does not replace that wrapper.
 
-The container never adds anything to qBittorrent. After an accepted upload,
-the registered torrent is in `/work`, and adding it with a full recheck stays
-the existing manual step.
+`check`, `history`, `dupe-accept` and `verify-identity` stay on
+`--network none`. `seed`, `seed-status` and `check-config` (when
+`qbittorrent` is configured) need the default network so they can reach the
+qBittorrent WebUI. `plan`, `upload`, `scan-ptt` and `ptt-status` keep the
+network they already use for TMDB and PTT. The host wrapper's hardening
+(`--read-only`, `--cap-drop ALL`, `no-new-privileges`, read-only mounts) is
+unchanged; this template does not replace that wrapper.
+
+`seed` sends the registered torrent from `/work` to qBittorrent through the
+WebAPI. It does not copy that file anywhere else. The torrent is added
+stopped, with automatic management off and the configured save path. It is
+started only after a recheck reaches 100% and the operator asked for it. A
+torrent already present under the PTT infohash is reported and left as it is.

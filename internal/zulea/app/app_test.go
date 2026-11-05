@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -266,6 +267,23 @@ func TestLoadConfig(t *testing.T) {
 		"file dir in library": func(c *Config) {
 			c.MediaInfo = MediaInfoConfig{Source: MediaInfoFile, Dir: filepath.Join(c.LibraryRoot, "mi")}
 		},
+		"qbit relative save": func(c *Config) {
+			c.QBittorrent = &QBitConfig{
+				Host:         "http://qbittorrent.invalid",
+				Username:     "u",
+				PasswordFile: "/secrets/qbit",
+				SavePath:     "library",
+			}
+		},
+		"qbit category path": func(c *Config) {
+			c.QBittorrent = &QBitConfig{
+				Host:         "http://qbittorrent.invalid",
+				Username:     "u",
+				PasswordFile: "/secrets/qbit",
+				SavePath:     "/data/library",
+				Category:     "a/b",
+			}
+		},
 	}
 	for name, mutate := range invalid {
 		c := cfg
@@ -274,9 +292,31 @@ func TestLoadConfig(t *testing.T) {
 			t.Errorf("%s: expected validation error", name)
 		}
 	}
+	cfg.QBittorrent = &QBitConfig{
+		Host:         "http://qbittorrent.invalid",
+		Username:     "u",
+		PasswordFile: "/secrets/qbit",
+		SavePath:     "/data/library",
+		Category:     "examples",
+	}
+	cfg.Nightly = &NightlyConfig{}
+	if err := cfg.Validate(); err != nil || cfg.NightlyScanEnabled() {
+		t.Fatalf("qbit config and nightly default: %v enabled=%t", err, cfg.NightlyScanEnabled())
+	}
+	cfg.Nightly.ScanPTT = true
+	if !cfg.NightlyScanEnabled() {
+		t.Fatal("nightly scan must be opt-in")
+	}
 }
 
 func TestKeyFilesMustBePrivate(t *testing.T) {
+	// The 0600 contract is Linux-only. Windows reports 0666 for every
+	// writable file because os.Chmod only toggles the read-only attribute,
+	// so a private key file cannot be distinguished there. The uploader
+	// runs on Linux, where this mode is enforced.
+	if runtime.GOOS == "windows" {
+		t.Skip("file mode 0600 is enforced on Linux; Windows does not store Unix permission bits")
+	}
 	path := filepath.Join(t.TempDir(), "k")
 	if err := os.WriteFile(path, []byte("abc\n"), 0o640); err != nil {
 		t.Fatal(err)

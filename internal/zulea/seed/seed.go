@@ -17,6 +17,16 @@ import (
 	qbittorrent "github.com/autobrr/go-qbittorrent"
 )
 
+// How a torrent came to be in qBittorrent.
+const (
+	// SeedSourceManual: the torrent was already there. Matched by the infohash
+	// of the torrent downloaded from the tracker (not the TM infohash). Its
+	// save path and category are left exactly as qBittorrent has them.
+	SeedSourceManual = "manual"
+	// SeedSourceCLI: this command added the torrent.
+	SeedSourceCLI = "cli"
+)
+
 // Torrent is the subset of qBittorrent state the step needs.
 type Torrent struct {
 	Hash     string
@@ -24,6 +34,7 @@ type Torrent struct {
 	Progress float64
 	State    string
 	SavePath string
+	Category string
 }
 
 // Client is the qBittorrent surface used by the step.
@@ -39,7 +50,11 @@ type Client interface {
 type Request struct {
 	// TorrentPath is the registered torrent downloaded from PTT.
 	TorrentPath string
-	// InfoHash is the v1 infohash of TorrentPath.
+	// InfoHash is the v1 infohash of TorrentPath, the torrent file that is
+	// added to qBittorrent (the one downloaded from the tracker). It is not
+	// the TM infohash: the tracker rewrites the info dictionary, so the
+	// hashes differ. Looking up the TM hash would miss the existing torrent
+	// and add a second copy.
 	InfoHash string
 	// Name is the expected torrent name (the release directory).
 	Name string
@@ -64,6 +79,12 @@ type Result struct {
 	State         string  `json:"state"`
 	Started       bool    `json:"started"`
 	Message       string  `json:"message"`
+	// SeedSource is SeedSourceManual or SeedSourceCLI.
+	SeedSource string `json:"seed_source,omitempty"`
+	// SavePath and Category are what qBittorrent currently has for an
+	// existing torrent. They are not rewritten.
+	SavePath string `json:"save_path,omitempty"`
+	Category string `json:"category,omitempty"`
 }
 
 func checking(state string) bool {
@@ -85,25 +106,43 @@ func Run(ctx context.Context, client Client, req Request) (Result, error) {
 		return res, fmt.Errorf("seed: qBittorrent lookup: %w", err)
 	}
 	if existing != nil {
+		// Already present under the tracker infohash. Do not add again and do
+		// not change the save path or category, even when they differ from
+		// the configuration (a category path plus auto TMM would move files).
 		res.AlreadyExists = true
+		res.SeedSource = SeedSourceManual
 		res.Progress, res.State = existing.Progress, existing.State
-		res.Message = "torrent już jest w qBittorrencie — nic nie zmieniono"
+		res.SavePath, res.Category = existing.SavePath, existing.Category
+		res.Message = fmt.Sprintf(
+			"torrent już jest w qBittorrencie (infohash %s, stan %s, postęp %.2f%%, save_path %q, kategoria %q) — ścieżka i kategoria bez zmian",
+			hash, existing.State, existing.Progress*100, existing.SavePath, existing.Category,
+		)
 		return res, nil
 	}
+	// savepath is the configured path as the qBittorrent container sees the
+	// library. It is never derived from the category. autoTMM is false so
+	// qBittorrent does not relocate the files. No completion action is set.
+	// The torrent file itself is uploaded through the WebAPI; it is not copied
+	// anywhere outside the work directory.
 	options := map[string]string{
 		"savepath":      req.SavePath,
-		"category":      req.Category,
-		"tags":          req.Tags,
 		"paused":        "true",
 		"stopped":       "true",
 		"skip_checking": "false",
 		"autoTMM":       "false",
 		"contentLayout": "Original",
 	}
+	if req.Category != "" {
+		options["category"] = req.Category
+	}
+	if req.Tags != "" {
+		options["tags"] = req.Tags
+	}
 	if err := client.Add(ctx, req.TorrentPath, options); err != nil {
 		return res, fmt.Errorf("seed: add torrent: %w", err)
 	}
 	res.Added = true
+	res.SeedSource = SeedSourceCLI
 	added, err := waitFor(ctx, client, hash, 30*time.Second, pollOf(req))
 	if err != nil {
 		return res, err
@@ -231,10 +270,11 @@ type QBit struct {
 // NewQBit creates a client for host with username/password authentication.
 func NewQBit(host, username, password string) *QBit {
 	return &QBit{client: qbittorrent.NewClient(qbittorrent.Config{
-		Host:     host,
-		Username: username,
-		Password: password,
-		Timeout:  30,
+		Host:          host,
+		Username:      username,
+		Password:      password,
+		Timeout:       30,
+		RetryAttempts: 1,
 	})}
 }
 
@@ -260,6 +300,7 @@ func (q *QBit) Find(ctx context.Context, hash string) (*Torrent, error) {
 				Progress: t.Progress,
 				State:    string(t.State),
 				SavePath: t.SavePath,
+				Category: t.Category,
 			}, nil
 		}
 	}
@@ -288,4 +329,49 @@ func (q *QBit) Start(ctx context.Context, hash string) error {
 		return fmt.Errorf("qbittorrent: %w", err)
 	}
 	return nil
+}
+
+// WebUIReport is a read-only look at the qBittorrent WebUI.
+type WebUIReport struct {
+	Version        string
+	SavePathExists bool
+	// AutoTMM is the default automatic torrent management setting.
+	AutoTMM bool
+}
+
+// WebUI is the read-only surface used by check-config.
+type WebUI interface {
+	Login(ctx context.Context) error
+	Inspect(ctx context.Context, savePath string) (WebUIReport, error)
+}
+
+// Inspect reads the WebUI version, whether savePath exists on the
+// qBittorrent side, and whether default automatic torrent management is on.
+// It does not add, move or reconfigure anything.
+func (q *QBit) Inspect(ctx context.Context, savePath string) (WebUIReport, error) {
+	var report WebUIReport
+	version, err := q.client.GetAppVersionCtx(ctx)
+	if err != nil {
+		return report, fmt.Errorf("qbittorrent version: %w", err)
+	}
+	report.Version = strings.TrimSpace(version)
+	prefs, err := q.client.GetAppPreferencesCtx(ctx)
+	if err != nil {
+		return report, fmt.Errorf("qbittorrent preferences: %w", err)
+	}
+	report.AutoTMM = prefs.AutoTmmEnabled
+	_, err = q.client.ListDirectoryCtx(ctx, savePath, qbittorrent.DirectoryContentDirs, false)
+	if err == nil {
+		report.SavePathExists = true
+		return report, nil
+	}
+	if errors.Is(err, qbittorrent.ErrUnsupportedVersion) {
+		return report, fmt.Errorf("qbittorrent cannot list %q (WebAPI too old to check the save path): %w", savePath, err)
+	}
+	if errors.Is(err, qbittorrent.ErrUnexpectedStatus) &&
+		(strings.Contains(err.Error(), "status code: 400") || strings.Contains(err.Error(), "status code: 404")) {
+		report.SavePathExists = false
+		return report, nil
+	}
+	return report, fmt.Errorf("qbittorrent save path %q: %w", savePath, err)
 }

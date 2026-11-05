@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -85,7 +86,13 @@ func TestCLIMediaInfoNormalizesAndWritesToWorkDir(t *testing.T) {
 		t.Fatalf("not normalized: %q", text)
 	}
 	st, err := os.Stat(path)
-	if err != nil || st.Mode().Perm() != 0o600 {
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Windows reports 0666 for every writable file: os.Chmod only toggles
+	// the read-only attribute, so the 0600 report cannot be observed there.
+	// The uploader runs on Linux, where this mode is enforced.
+	if runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %v", st.Mode().Perm())
 	}
 }

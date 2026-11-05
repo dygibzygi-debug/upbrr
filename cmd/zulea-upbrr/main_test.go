@@ -46,9 +46,9 @@ func TestDupeAcceptRequiresTerminal(t *testing.T) {
 	}
 }
 
-func TestVersionIs060(t *testing.T) {
+func TestVersion(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if code := run(context.Background(), []string{"version"}, &out, &errOut); code != exitOK || !strings.Contains(out.String(), "0.6.1") {
+	if code := run(context.Background(), []string{"version"}, &out, &errOut); code != exitOK || !strings.Contains(out.String(), "0.6.2") {
 		t.Fatalf("exit %d out %q err %q", code, out.String(), errOut.String())
 	}
 }
@@ -77,6 +77,14 @@ func TestNamesCommand(t *testing.T) {
 	out.Reset()
 	if code := run(context.Background(), []string{"names", "Bad-GRP"}, &out, &errOut); code != exitStop {
 		t.Fatalf("invalid name exit %d", code)
+	}
+}
+
+func TestScanDelayMinimum(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"scan-ptt", "--config", "x.json", "--delay", "1s"}, &out, &errOut)
+	if code != exitUsage || !strings.Contains(errOut.String(), "3s") {
+		t.Fatalf("exit %d err %q", code, errOut.String())
 	}
 }
 
