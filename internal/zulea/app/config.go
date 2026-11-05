@@ -48,6 +48,19 @@ type Config struct {
 	// Trackers lists enabled trackers. Stage 1 supports only "PTT"; empty means none.
 	Trackers []string  `json:"trackers"`
 	PTT      PTTConfig `json:"ptt"`
+	// QBittorrent enables the separate seeding step (zulea-upbrr seed).
+	QBittorrent *QBitConfig `json:"qbittorrent,omitempty"`
+}
+
+// QBitConfig configures the seeding step. The password lives in a 0600 file.
+type QBitConfig struct {
+	Host         string `json:"host"`
+	Username     string `json:"username,omitempty"`
+	PasswordFile string `json:"password_file,omitempty"`
+	// SavePath is the library root as qBittorrent sees it (its own mount).
+	SavePath string `json:"save_path"`
+	Category string `json:"category,omitempty"`
+	Tags     string `json:"tags,omitempty"`
 }
 
 // MediaInfo sources (decision D-6).
@@ -157,6 +170,14 @@ func (c Config) Validate() error {
 	if err := c.DiskCheck().Validate(); err != nil {
 		return fmt.Errorf("config: physical_disk/disk_check_mode: %w", err)
 	}
+	if q := c.QBittorrent; q != nil {
+		if strings.TrimSpace(q.Host) == "" || strings.TrimSpace(q.SavePath) == "" {
+			return errors.New("config: qbittorrent.host and qbittorrent.save_path are required")
+		}
+		if (q.Username == "") != (q.PasswordFile == "") {
+			return errors.New("config: qbittorrent.username and qbittorrent.password_file go together")
+		}
+	}
 	switch c.MediaInfo.Source {
 	case MediaInfoCLI:
 		if strings.TrimSpace(c.MediaInfo.Binary) == "" {
@@ -204,4 +225,42 @@ func readKeyFile(path string) (string, error) {
 		return "", errors.New("key file must contain exactly one key")
 	}
 	return key, nil
+}
+
+// ApplyTaxonomy writes tax into the config file at path, keeping it 0600 and
+// valid. The previous file is replaced atomically.
+func ApplyTaxonomy(path string, tax pttplan.Taxonomy) error {
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		return err
+	}
+	cfg.PTT.Taxonomy = &tax
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("config: encode: %w", err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("config: temp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("config: chmod: %w", err)
+	}
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("config: write: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("config: close: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("config: replace: %w", err)
+	}
+	return nil
 }

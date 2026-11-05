@@ -29,6 +29,8 @@ type CheckResult struct {
 	InfoHash string `json:"info_hash,omitempty"`
 	RunID    string `json:"tm_run_id,omitempty"`
 	Images   int    `json:"images,omitempty"`
+	// Warnings are non-blocking findings (e.g. names.py title warnings).
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // CheckSummary is the result of Check.
@@ -91,15 +93,20 @@ func (r *Runner) Check(releases []string) (CheckSummary, error) {
 			result.InfoHash = prepared.Torrent.InfoHash
 			result.RunID = prepared.TMRunID
 			result.Images = len(prepared.ImageURLs)
+			result.Warnings = prepared.Warnings
 			summary.OK++
 		}
 		summary.Results = append(summary.Results, result)
 	}
-	path, err := r.writeJSON("reports", "check-"+time.Now().UTC().Format("20060102-150405")+".json", summary)
+	stamp := time.Now().UTC().Format("20060102-150405")
+	path, err := r.writeJSON("reports", "check-"+stamp+".json", summary)
 	if err != nil {
 		return summary, err
 	}
 	summary.ReportPath = path
+	if err := r.writeText("reports", "check-"+stamp+".md", CheckMarkdown(summary)); err != nil {
+		return summary, err
+	}
 	return summary, nil
 }
 
@@ -117,7 +124,7 @@ func RenderCheck(w io.Writer, s CheckSummary) {
 	_ = tw.Flush()
 	_, _ = fmt.Fprintf(w, "\nPODSUMOWANIE: OK=%d STOP=%d pominięte (bez statusu OK w zamrożeniu)=%d; bez sieci.\n", s.OK, s.Stop, s.Skipped)
 	if s.ReportPath != "" {
-		_, _ = fmt.Fprintf(w, "raport: %s\n", s.ReportPath)
+		_, _ = fmt.Fprintf(w, "raport: %s (+ .md)\n", s.ReportPath)
 	}
 }
 

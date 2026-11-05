@@ -9,6 +9,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,11 +19,14 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/term"
 
 	"github.com/autobrr/upbrr/internal/zulea/app"
 	"github.com/autobrr/upbrr/internal/zulea/names"
+	"github.com/autobrr/upbrr/internal/zulea/ptttax"
+	"github.com/autobrr/upbrr/internal/zulea/seed"
 	"github.com/autobrr/upbrr/internal/zulea/tm"
 )
 
@@ -51,6 +55,13 @@ Użycie:
   zulea-upbrr check --config FILE [--release REL ... | --list FILE]   (cały łańcuch, bez sieci; domyślnie wszystkie OK)
   zulea-upbrr verify-identity --config FILE --release REL           (diagnostyka W-3: ino/size/mtime, dysk)
   zulea-upbrr receipts --config FILE                                (pokwitowania wysyłek)
+  zulea-upbrr scan-ptt --config FILE [--release REL ...] [--delay 3s] (co już jest na PTT; tylko odczyt)
+  zulea-upbrr queue --config FILE [--limit N]                       (kolejne wolne wydania wg ostatniego skanu)
+  zulea-upbrr verify-uploaded --config FILE --release REL [--ptt-id ID] (sprawdzenie dawnego ręcznego uploadu)
+  zulea-upbrr seed --config FILE --release REL [--wait 30m] [--start] (qBittorrent: zatrzymany, pełny recheck)
+  zulea-upbrr seed --config FILE --release REL --start-verified       (uruchom seed tylko przy 100%)
+  zulea-upbrr sync-inputs --dest DIR --freeze F --freeze-sha SHA [--runs DIR] [--titles F] [--owner 99:100]
+  zulea-upbrr ptt-taxonomy --options FILE [--apply CONFIG]            (ID z formularza PTT -> konfiguracja)
   zulea-upbrr check-config --config FILE
   zulea-upbrr names --titles FILE --tmdb-id ID REL
   zulea-upbrr compare-torrent ORYGINAL_TM.torrent POBRANY.torrent
@@ -93,6 +104,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runVerifyIdentity(args[1:], stdout, stderr)
 	case "receipts":
 		return runReceipts(args[1:], stdout, stderr)
+	case "scan-ptt":
+		return runScan(ctx, args[1:], stdout, stderr)
+	case "queue":
+		return runQueue(args[1:], stdout, stderr)
+	case "verify-uploaded":
+		return runVerifyUploaded(ctx, args[1:], stdout, stderr)
+	case "seed":
+		return runSeed(ctx, args[1:], stdout, stderr)
+	case "sync-inputs":
+		return runSync(args[1:], stdout, stderr)
+	case "ptt-taxonomy":
+		return runTaxonomy(args[1:], stdout, stderr)
 	case "submit", "send":
 		fmt.Fprintln(stderr, "zulea-upbrr: nie ma tej komendy. Wysyłka: zulea-upbrr upload (tylko interaktywnie, po dry-run i potwierdzeniu fingerprintu).")
 		return exitUsage
@@ -404,5 +427,200 @@ func runReceipts(args []string, stdout, stderr io.Writer) int {
 		return exitRuntime
 	}
 	app.RenderReceipts(stdout, list)
+	return exitOK
+}
+
+func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	var releases multiFlag
+	var listPath string
+	delay := 3 * time.Second
+	cfg, ok := loadConfigFlag("scan-ptt", args, stderr, func(fs *flag.FlagSet) {
+		fs.Var(&releases, "release", "nazwa wydania (można powtarzać)")
+		fs.StringVar(&listPath, "list", "", "plik z listą wydań")
+		fs.DurationVar(&delay, "delay", delay, "odstęp między wydaniami (grzeczność wobec trackera)")
+	})
+	if !ok {
+		return exitUsage
+	}
+	if listPath != "" {
+		listed, err := readList(listPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "zulea-upbrr scan-ptt: %v\n", err)
+			return exitUsage
+		}
+		releases = append(releases, listed...)
+	}
+	logger := app.NewLogger(stderr, false)
+	summary, err := (&app.Runner{Config: cfg, Logger: logger}).ScanPTT(ctx, releases, delay)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr scan-ptt: %s\n", logger.Sanitize(err.Error()))
+		if len(summary.Results) == 0 {
+			return exitRuntime
+		}
+	}
+	app.RenderScan(stdout, summary)
+	return exitOK
+}
+
+func runQueue(args []string, stdout, stderr io.Writer) int {
+	limit := 20
+	cfg, ok := loadConfigFlag("queue", args, stderr, func(fs *flag.FlagSet) {
+		fs.IntVar(&limit, "limit", limit, "ile pozycji pokazać (0 = wszystkie)")
+	})
+	if !ok {
+		return exitUsage
+	}
+	entries, scanPath, err := (&app.Runner{Config: cfg}).Queue()
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr queue: %v\n", err)
+		return exitRuntime
+	}
+	app.RenderQueue(stdout, entries, scanPath, limit)
+	return exitOK
+}
+
+func runVerifyUploaded(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	var release, id string
+	cfg, ok := loadConfigFlag("verify-uploaded", args, stderr, func(fs *flag.FlagSet) {
+		fs.StringVar(&release, "release", "", "nazwa wydania")
+		fs.StringVar(&id, "ptt-id", "", "ID torrenta na PTT (opcjonalnie)")
+	})
+	if !ok || release == "" {
+		if ok {
+			fmt.Fprintln(stderr, "zulea-upbrr verify-uploaded: wymagane --release")
+		}
+		return exitUsage
+	}
+	logger := app.NewLogger(stderr, false)
+	res, err := (&app.Runner{Config: cfg, Logger: logger}).VerifyUploaded(ctx, release, id)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr verify-uploaded: %s\n", logger.Sanitize(err.Error()))
+		return exitRuntime
+	}
+	fmt.Fprint(stdout, logger.MaskKnown(res.Comparison.Report()))
+	fmt.Fprintf(stdout, "PTT id %s, pobrany torrent: %s\n", res.PTTID, res.Path)
+	if !res.Comparison.OK() {
+		return exitStop
+	}
+	return exitOK
+}
+
+func runSeed(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	var release string
+	var wait time.Duration
+	var start, startVerified bool
+	cfg, ok := loadConfigFlag("seed", args, stderr, func(fs *flag.FlagSet) {
+		fs.StringVar(&release, "release", "", "nazwa wydania z pokwitowaniem accepted")
+		fs.DurationVar(&wait, "wait", 0, "ile czekać na koniec rechecku (np. 30m)")
+		fs.BoolVar(&start, "start", false, "uruchom seed po rechecku, tylko przy 100%")
+		fs.BoolVar(&startVerified, "start-verified", false, "uruchom istniejący torrent, tylko przy 100%")
+	})
+	if !ok || release == "" {
+		if ok {
+			fmt.Fprintln(stderr, "zulea-upbrr seed: wymagane --release")
+		}
+		return exitUsage
+	}
+	runner := &app.Runner{Config: cfg}
+	var res seed.Result
+	var err error
+	if startVerified {
+		res, err = runner.StartSeedVerified(ctx, release)
+	} else {
+		res, err = runner.Seed(ctx, app.SeedRequest{
+			Release: release,
+			Wait:    wait,
+			Start:   start,
+		}, nil)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr seed: %v\n", err)
+		return exitRuntime
+	}
+	fmt.Fprintf(stdout, "infohash %s; dodano=%t; był=%t; stan=%s; postęp=%.2f%%; seed=%t\n%s\n",
+		res.Hash, res.Added, res.AlreadyExists, res.State, res.Progress*100, res.Started, res.Message)
+	return exitOK
+}
+
+func runSync(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("sync-inputs", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var req app.SyncRequest
+	var owner string
+	fs.StringVar(&req.Dest, "dest", "", "katalog docelowy kopii (appdata uploadera)")
+	fs.StringVar(&req.FreezeSrc, "freeze", "", "aktywny plik zamrożenia")
+	fs.StringVar(&req.FreezeSHA256, "freeze-sha", "", "oczekiwane SHA-256 zamrożenia")
+	fs.StringVar(&req.RunsSrc, "runs", "", "katalog runs/ wrappera TM")
+	fs.StringVar(&req.TitlesSrc, "titles", "", "tmdb-titles.tsv")
+	fs.StringVar(&owner, "owner", "", "uid:gid dla kopii, np. 99:100 (wymaga roota)")
+	if err := fs.Parse(args); err != nil || req.Dest == "" || fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "zulea-upbrr sync-inputs: wymagane --dest oraz co najmniej jedno źródło")
+		return exitUsage
+	}
+	if owner != "" {
+		var uid, gid int
+		if _, err := fmt.Sscanf(owner, "%d:%d", &uid, &gid); err != nil {
+			fmt.Fprintln(stderr, "zulea-upbrr sync-inputs: --owner w postaci uid:gid")
+			return exitUsage
+		}
+		req.Owner = &[2]int{uid, gid}
+	}
+	res, err := app.SyncInputs(req)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr sync-inputs: %v\n", err)
+		return exitRuntime
+	}
+	for _, p := range res.Copied {
+		fmt.Fprintf(stdout, "skopiowano    %s\n", p)
+	}
+	for _, p := range res.Unchanged {
+		fmt.Fprintf(stdout, "bez zmian     %s\n", p)
+	}
+	for _, p := range res.Incomplete {
+		fmt.Fprintf(stdout, "pominięto (przebieg TM w toku) %s\n", p)
+	}
+	return exitOK
+}
+
+func runTaxonomy(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("ptt-taxonomy", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	optionsPath := fs.String("options", "", "plik z wklejonymi listami <select>/<option> z formularza PTT")
+	apply := fs.String("apply", "", "zapisz tabelę do tego pliku konfiguracji")
+	if err := fs.Parse(args); err != nil || *optionsPath == "" || fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "zulea-upbrr ptt-taxonomy: wymagane --options")
+		return exitUsage
+	}
+	data, err := os.ReadFile(*optionsPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr ptt-taxonomy: %v\n", err)
+		return exitUsage
+	}
+	lists, err := ptttax.Parse(string(data))
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr ptt-taxonomy: %v\n", err)
+		return exitStop
+	}
+	tax, notes, err := ptttax.Build(lists)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr ptt-taxonomy: %v\n", err)
+		return exitStop
+	}
+	out, err := json.MarshalIndent(tax, "", "  ")
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr ptt-taxonomy: %v\n", err)
+		return exitRuntime
+	}
+	fmt.Fprintf(stdout, "%s\n", out)
+	for _, n := range notes {
+		fmt.Fprintf(stdout, "UWAGA: %s\n", n)
+	}
+	if *apply != "" {
+		if err := app.ApplyTaxonomy(*apply, tax); err != nil {
+			fmt.Fprintf(stderr, "zulea-upbrr ptt-taxonomy: %v\n", err)
+			return exitRuntime
+		}
+		fmt.Fprintf(stdout, "zapisano do %s\n", *apply)
+	}
 	return exitOK
 }

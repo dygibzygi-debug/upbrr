@@ -35,6 +35,7 @@ type fakeUploadPTT struct {
 	torrent    []byte
 	nfo        []byte
 	respondErr bool
+	filterRows string
 }
 
 func (f *fakeUploadPTT) handler(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +45,7 @@ func (f *fakeUploadPTT) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/torrents/filter":
-		_, _ = w.Write([]byte(`{"data":[],"links":{"next":null},"meta":{"current_page":1,"last_page":1}}`))
+		_, _ = w.Write([]byte(`{"data":[` + f.filterRows + `],"links":{"next":null},"meta":{"current_page":1,"last_page":1}}`))
 	case r.Method == http.MethodPost && r.URL.Path == "/api/torrents/upload":
 		f.mu.Lock()
 		f.uploads++

@@ -187,9 +187,16 @@ zulea-upbrr names --titles tmdb-titles.tsv --tmdb-id <ID> <REL>
 zulea-upbrr check --config /srv/zulea-upbrr/zulea.json            # whole chain, every OK release, no network
 zulea-upbrr verify-identity --config /srv/zulea-upbrr/zulea.json --release <REL>
 zulea-upbrr receipts --config /srv/zulea-upbrr/zulea.json
+zulea-upbrr scan-ptt --config F [--delay 3s]          # which OK releases are already on PTT (read only) + Markdown report
+zulea-upbrr queue --config F                           # next CLEAR releases without a receipt (from the latest scan)
+zulea-upbrr verify-uploaded --config F --release REL   # compare a past manual upload's PTT torrent with TM
+zulea-upbrr seed --config F --release REL --wait 30m [--start]   # qBittorrent: stopped, full recheck, start only at 100%
+zulea-upbrr sync-inputs --dest D --freeze F --freeze-sha S --runs R --titles T --owner 99:100   # uploader-readable copies
+zulea-upbrr ptt-taxonomy --options pasted.html [--apply zulea.json]   # PTT form IDs -> config (W-1)
 ```
 
-A container template lives in `scripts/zulea/docker/`.
+`check` and `scan-ptt` also write a Markdown readiness report next to the
+JSON report. A container template lives in `scripts/zulea/docker/`.
 
 ## Upload (canary, human-confirmed)
 

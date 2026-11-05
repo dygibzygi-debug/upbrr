@@ -13,7 +13,10 @@ Scope: `internal/zulea/`, `cmd/zulea-upbrr/`, `scripts/zulea/`. Root and `intern
   - the typed phrase `WYSYLAM <12 hex>`;
   - an upload-intent plan that reproduces the same fingerprint.
 
-  Never add flags, environment variables, batch modes or defaults that skip a gate. Never retry automatically after `attempted`, `uncertain`, `rejected` or `accepted`. Never inject into a torrent client.
+  Never add flags, environment variables, batch modes or defaults that skip a gate. Never retry automatically after `attempted`, `uncertain`, `rejected` or `accepted`. Uploads never inject into a torrent client.
+- **Seeding is a separate, explicit command.** `zulea-upbrr seed` requires an `accepted` receipt with `DANE_ZGODNE=TAK` and matching names. It adds only the registered torrent downloaded from PTT, always stopped with a full recheck, and never touches an existing torrent. It starts seeding only at progress 100% when the operator asked (`--start` / `--start-verified`). It never deletes, moves or rewrites torrents.
+- **Read-only tracker operations stay read only.** `scan-ptt`, `queue` and `verify-uploaded` only search or download; they never upload.
+- **`sync-inputs` never overwrites evidence.** A different freeze or completed manifest under the same name is an error; manifests of running TM batches are skipped.
 - **The library is read only.** Never write, rename, chmod or create files under `library_root`. Generated artifacts (upload torrent copy, MediaInfo, reports) go below `work_dir`, which must not overlap the library.
 - **Never open `<REL>.screens.json`.** It holds ImgBB delete URLs. Screenshot links come only from the ready description.
 - **The TM torrent is sent unchanged.** The upload copy keeps the TM `info` bytes verbatim (same infohash) and drops every top-level key. There is no fallback: a missing or non-conforming TM torrent is a STOP, never a reason to let upbrr build or personalize a torrent.

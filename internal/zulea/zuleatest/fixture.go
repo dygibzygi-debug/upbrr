@@ -209,7 +209,7 @@ func NewAt(t *testing.T, root string, opts Options) *Env {
 			Release, "Synthetic.Source", TMDBID, ino, size, mtime, nIno, nSize, nMtime,
 			hex.EncodeToString(nfoSum[:]), env.InfoHash, status, hex.EncodeToString(torrentSum[:]),
 			"APPLY_OK", strings.Repeat("0", 64), "OK", "",
-		}, "\t") + "\n# WYNIK=OK\n"
+		}, "\t") + "\n# KONIEC=2026-11-04T00:00:00\n# WYNIK=OK\n# OK=1\n# POMINIETE=0\n"
 	env.ManifestPath = filepath.Join(root, "runs", "run-1", "manifest-20261104-000000.tsv")
 	write(t, env.ManifestPath, []byte(manifest), 0o600)
 	return env
