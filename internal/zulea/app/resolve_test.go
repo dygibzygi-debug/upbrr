@@ -20,7 +20,7 @@ import (
 const otherRelease = "Other.Film.2019.PL.1080p.REMUX.BluRay.AVC.DD.2.0-Zulea"
 
 func gateOpen(runner *Runner) bool {
-	return runner.canaryGate(&pttplan.Plan{TaxonomyConfirmed: true}, &pttdupe.Result{Status: "CLEAR"}, "k").Ready
+	return runner.canaryGate(zuleatest.Release, &pttplan.Plan{TaxonomyConfirmed: true}, &pttdupe.Result{Status: "CLEAR"}, "k").Ready
 }
 
 func TestUnsettledReceiptsBlockQueueAndGate(t *testing.T) {

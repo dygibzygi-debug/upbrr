@@ -75,15 +75,13 @@ var httpTransport = http.DefaultTransport
 // pttRows is the JSON row list the fake PTT search returns (reset per setup).
 var pttRows string
 
-func ptr(v bool) *bool { return &v }
-
 func completeCanaryConfig(cfg Config) Config {
 	cfg.PTT.Taxonomy = &pttplan.Taxonomy{
 		Category:   map[string]string{"MOVIE": "1"},
 		Type:       map[string]string{"REMUX": "2"},
 		Resolution: map[string]string{"1080p": "3"},
 	}
-	cfg.PTT.PersonalRelease = ptr(true)
+	cfg.PTT.PersonalRelease = new(true)
 	cfg.PTT.ModQueue = true
 	return cfg
 }
@@ -353,7 +351,7 @@ func TestCanaryBlocksUpbrrMediaInfo(t *testing.T) {
 	_, cfg, _ := setup(t)
 	cfg = completeCanaryConfig(cfg)
 	cfg.MediaInfo = MediaInfoConfig{Source: MediaInfoUpbrr}
-	gate := (&Runner{Config: cfg}).canaryGate(&pttplan.Plan{TaxonomyConfirmed: true}, nil, "k")
+	gate := (&Runner{Config: cfg}).canaryGate(zuleatest.Release, &pttplan.Plan{TaxonomyConfirmed: true}, nil, "k")
 	if gate.Ready || !strings.Contains(strings.Join(gate.Blockers, "|"), "D-6") {
 		t.Fatalf("gate %+v", gate)
 	}

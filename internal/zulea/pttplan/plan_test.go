@@ -201,6 +201,43 @@ func TestBuildPTTDryRunThroughUpbrr(t *testing.T) {
 	}
 }
 
+func TestAcceptanceSHAChangesFingerprint(t *testing.T) {
+	env := zuleatest.New(t, zuleatest.Options{})
+	opts, _ := options(t, env, &captureLogger{})
+	plain, err := Build(context.Background(), prepared(t, env), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := fingerprintDocument(plain, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(doc, []byte("acceptance_sha")) {
+		t.Fatalf("empty acceptance leaked into the fingerprint document: %s", doc)
+	}
+	opts.AcceptanceSHA = strings.Repeat("ab", 32)
+	with, err := Build(context.Background(), prepared(t, env), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Fingerprint == with.Fingerprint {
+		t.Fatal("acceptance SHA must change the fingerprint")
+	}
+	again := *plain
+	if err := again.ApplyAcceptanceSHA(opts.AcceptanceSHA); err != nil {
+		t.Fatal(err)
+	}
+	if again.Fingerprint != with.Fingerprint {
+		t.Fatal("recomputed fingerprint diverges from a plan built with the acceptance SHA")
+	}
+	if err := again.ApplyAcceptanceSHA(""); err != nil {
+		t.Fatal(err)
+	}
+	if again.Fingerprint != plain.Fingerprint {
+		t.Fatal("clearing the acceptance SHA must restore the fingerprint")
+	}
+}
+
 func TestBuildIsDeterministic(t *testing.T) {
 	env := zuleatest.New(t, zuleatest.Options{})
 	opts, _ := options(t, env, &captureLogger{})

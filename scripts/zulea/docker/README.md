@@ -87,7 +87,14 @@ docker run --rm --network none ... zulea-upbrr:local check --config /secrets/zul
 docker run --rm ... zulea-upbrr:local plan --config /secrets/zulea.json --release <REL>
 # canary upload: interactive terminal required (-it), run only by the owner
 docker run --rm -it ... zulea-upbrr:local upload --config /secrets/zulea.json --release <REL> --fingerprint <FP>
+# human duplicate acceptance: interactive terminal, no tracker traffic, no --force
+docker run --rm -it --network none ... zulea-upbrr:local dupe-accept --config /secrets/zulea.json --release <REL> --reason "..."
 ```
+
+`dupe-accept` reads the newest `scan-ptt` or `plan` report under `/work`.
+Nightly automation must not run it. The operator runbook in
+`scripts/zulea/deploy/v5/` changes only the image tag on the wrapper already
+deployed on the host. It does not replace that wrapper.
 
 The container never adds anything to qBittorrent. After an accepted upload,
 the registered torrent is in `/work`, and adding it with a full recheck stays

@@ -1,8 +1,8 @@
 // Copyright (c) 2026, Zulea contributors.
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// Package app wires the Zulea uploader: configuration, dry-run planning and
-// reports. Stage 1 offers dry-run only; there is no upload entry point.
+// Package app wires the Zulea uploader: configuration, dry-run planning,
+// the gated canary upload and operator decisions (resolve, dupe-accept).
 package app
 
 import (
