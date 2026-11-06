@@ -34,6 +34,10 @@ type DupeAcceptRequest struct {
 	Revoke  bool
 	Preview io.Writer
 	Confirm func(prompt string) (string, error)
+	// ConfirmationPath replaces the terminal prompt for the panel.
+	ConfirmationPath string
+	// Confirmation is stored on the decision. Empty channel means terminal.
+	Confirmation ConfirmationStamp
 }
 
 type searchSnapshot struct {
@@ -53,7 +57,7 @@ type releaseFacts struct {
 // DupeAccept records or withdraws a human duplicate acceptance. It reads the
 // latest scan-ptt or plan report and never contacts a tracker.
 func (r *Runner) DupeAccept(req DupeAcceptRequest) (dupeaccept.Record, error) {
-	if req.Preview == nil || req.Confirm == nil {
+	if req.Preview == nil || (req.Confirm == nil && req.ConfirmationPath == "") {
 		return dupeaccept.Record{}, refuse("interactive confirmation is required")
 	}
 	if !validName(req.Release) {
@@ -102,10 +106,16 @@ func (r *Runner) recordAcceptance(req DupeAcceptRequest, reason string) (dupeacc
 	if err != nil {
 		return dupeaccept.Record{}, err
 	}
-	typed, err := req.Confirm(fmt.Sprintf("Zapisać akceptację duplikatu dla %s? Wpisz dokładnie: %s\n> ", req.Release, phrase))
+	typed, stamp, err := takePhrase(req.ConfirmationPath, ConfirmationExpect{
+		Command: "dupe-accept",
+		Release: req.Release,
+		SHA:     sha,
+		Phrase:  phrase,
+	}, fmt.Sprintf("Zapisać akceptację duplikatu dla %s? Wpisz dokładnie: %s\n> ", req.Release, phrase), req.Confirm)
 	if err != nil {
 		return dupeaccept.Record{}, refuse("confirmation failed: %v", err)
 	}
+	req.Confirmation = stamp
 	if strings.TrimSpace(typed) != phrase {
 		return dupeaccept.Record{}, refuse("confirmation phrase did not match; nothing was saved")
 	}
@@ -116,7 +126,7 @@ func (r *Runner) recordAcceptance(req DupeAcceptRequest, reason string) (dupeacc
 	if err != nil {
 		return dupeaccept.Record{}, err
 	}
-	rec.Append(dupeaccept.Decision{
+	rec.Append(decisionWithConfirmation(dupeaccept.Decision{
 		Action:       dupeaccept.ActionAccept,
 		At:           time.Now().UTC().Format(time.RFC3339),
 		Reason:       reason,
@@ -125,12 +135,23 @@ func (r *Runner) recordAcceptance(req DupeAcceptRequest, reason string) (dupeacc
 		Status:       snap.Status,
 		SourceReport: snap.Path,
 		Version:      Version,
-	})
+	}, req.Confirmation))
 	if err := dupeaccept.Save(path, rec); err != nil {
 		return dupeaccept.Record{}, fmt.Errorf("zulea: dupe-accept: %w", err)
 	}
 	r.logDupeDecision("dupe_accept", req.Release, sha)
 	return rec, nil
+}
+
+func decisionWithConfirmation(d dupeaccept.Decision, stamp ConfirmationStamp) dupeaccept.Decision {
+	if stamp.Channel == "" {
+		stamp.Channel = ChannelTerminal
+	}
+	d.Channel = stamp.Channel
+	d.Who = stamp.Who
+	d.IP = stamp.IP
+	d.Session = stamp.Session
+	return d
 }
 
 func (r *Runner) revokeAcceptance(req DupeAcceptRequest, reason string) (dupeaccept.Record, error) {
@@ -156,17 +177,23 @@ func (r *Runner) revokeAcceptance(req DupeAcceptRequest, reason string) (dupeacc
 		return dupeaccept.Record{}, refuse("%v", err)
 	}
 	_, _ = fmt.Fprintf(req.Preview, "Fraza: %s\n", phrase)
-	typed, err := req.Confirm(fmt.Sprintf("Wycofać akceptację duplikatu dla %s? Wpisz dokładnie: %s\n> ", req.Release, phrase))
+	typed, stamp, err := takePhrase(req.ConfirmationPath, ConfirmationExpect{
+		Command: "dupe-accept",
+		Release: req.Release,
+		SHA:     active.CandidateSHA,
+		Phrase:  phrase,
+	}, fmt.Sprintf("Wycofać akceptację duplikatu dla %s? Wpisz dokładnie: %s\n> ", req.Release, phrase), req.Confirm)
 	if err != nil {
 		return dupeaccept.Record{}, refuse("confirmation failed: %v", err)
 	}
+	req.Confirmation = stamp
 	if strings.TrimSpace(typed) != phrase {
 		return dupeaccept.Record{}, refuse("confirmation phrase did not match; nothing was changed")
 	}
 	if err := acceptFileUnchanged(path, before, false); err != nil {
 		return dupeaccept.Record{}, err
 	}
-	rec.Append(dupeaccept.Decision{
+	rec.Append(decisionWithConfirmation(dupeaccept.Decision{
 		Action:       dupeaccept.ActionRevoke,
 		At:           time.Now().UTC().Format(time.RFC3339),
 		Reason:       reason,
@@ -175,7 +202,7 @@ func (r *Runner) revokeAcceptance(req DupeAcceptRequest, reason string) (dupeacc
 		Status:       active.Status,
 		SourceReport: active.SourceReport,
 		Version:      Version,
-	})
+	}, req.Confirmation))
 	if err := dupeaccept.Save(path, rec); err != nil {
 		return dupeaccept.Record{}, fmt.Errorf("zulea: dupe-accept: %w", err)
 	}

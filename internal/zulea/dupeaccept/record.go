@@ -45,6 +45,10 @@ type Decision struct {
 	Status       string              `json:"status"`
 	SourceReport string              `json:"source_report,omitempty"`
 	Version      string              `json:"version"`
+	Channel      string              `json:"channel,omitempty"`
+	Who          string              `json:"who,omitempty"`
+	IP           string              `json:"ip,omitempty"`
+	Session      string              `json:"session,omitempty"`
 }
 
 // Record is work/dupe-accept/<REL>.ptt.json. The top-level fields mirror the
@@ -59,6 +63,10 @@ type Record struct {
 	Status       string              `json:"status"`
 	Candidates   []pttdupe.Candidate `json:"candidates"`
 	SourceReport string              `json:"source_report,omitempty"`
+	Channel      string              `json:"channel,omitempty"`
+	Who          string              `json:"who,omitempty"`
+	IP           string              `json:"ip,omitempty"`
+	Session      string              `json:"session,omitempty"`
 	History      []Decision          `json:"history"`
 }
 
@@ -86,6 +94,10 @@ func (r *Record) Append(d Decision) {
 	r.Candidates = cloneCandidates(d.Candidates)
 	r.SourceReport = d.SourceReport
 	r.Version = d.Version
+	r.Channel = d.Channel
+	r.Who = d.Who
+	r.IP = d.IP
+	r.Session = d.Session
 }
 
 // Path is the acceptance file for one release.
@@ -277,7 +289,8 @@ func (r *Record) validate() error {
 	}
 	last := r.History[len(r.History)-1]
 	if r.Action != last.Action || r.CandidateSHA != last.CandidateSHA || r.Reason != last.Reason ||
-		r.At != last.At || r.Version != last.Version || r.Status != last.Status || r.SourceReport != last.SourceReport {
+		r.At != last.At || r.Version != last.Version || r.Status != last.Status || r.SourceReport != last.SourceReport ||
+		r.Channel != last.Channel || r.Who != last.Who || r.IP != last.IP || r.Session != last.Session {
 		return errors.New("dupe-accept: record header does not match the latest decision")
 	}
 	got, err := SetSHA(r.Candidates)

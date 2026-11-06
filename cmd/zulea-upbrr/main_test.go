@@ -48,7 +48,7 @@ func TestDupeAcceptRequiresTerminal(t *testing.T) {
 
 func TestVersion(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if code := run(context.Background(), []string{"version"}, &out, &errOut); code != exitOK || !strings.Contains(out.String(), "0.6.2") {
+	if code := run(context.Background(), []string{"version"}, &out, &errOut); code != exitOK || !strings.Contains(out.String(), "0.7.0") {
 		t.Fatalf("exit %d out %q err %q", code, out.String(), errOut.String())
 	}
 }

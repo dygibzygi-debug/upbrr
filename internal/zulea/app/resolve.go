@@ -93,6 +93,10 @@ type ResolveRequest struct {
 	Note    string
 	Preview io.Writer
 	Confirm func(prompt string) (string, error)
+	// ConfirmationPath replaces the terminal prompt for the panel.
+	ConfirmationPath string
+	// Confirmation replaces the receipt's confirmation stamp.
+	Confirmation ConfirmationStamp
 }
 
 var pttIDPattern = regexp.MustCompile(`^[0-9]{1,12}$`)
@@ -123,7 +127,7 @@ func allowedResolution(from, to string, rc Receipt) bool {
 // tracker and never uploads. It requires the typed phrase bound to the shown
 // receipt and keeps the full decision history in the receipt.
 func (r *Runner) Resolve(req ResolveRequest) (Receipt, error) {
-	if req.Confirm == nil || req.Preview == nil {
+	if req.Preview == nil || (req.Confirm == nil && req.ConfirmationPath == "") {
 		return Receipt{}, refuse("interactive confirmation is required")
 	}
 	if !validName(req.Release) {
@@ -163,10 +167,18 @@ func (r *Runner) Resolve(req ResolveRequest) (Receipt, error) {
 	}
 	_, _ = fmt.Fprintf(req.Preview, "Pokwitowanie %s:\n%s\n", path, strings.TrimSpace(string(data)))
 	phrase := ResolvePhrase(req.State, data)
-	typed, err := req.Confirm(fmt.Sprintf("Zmienić stan %s z %s na %s? Wpisz dokładnie: %s\n> ", req.Release, from, req.State, phrase))
+	sum := sha256.Sum256(data)
+	typed, stamp, err := takePhrase(req.ConfirmationPath, ConfirmationExpect{
+		Command: "resolve",
+		Release: req.Release,
+		State:   req.State,
+		SHA:     hex.EncodeToString(sum[:]),
+		Phrase:  phrase,
+	}, fmt.Sprintf("Zmienić stan %s z %s na %s? Wpisz dokładnie: %s\n> ", req.Release, from, req.State, phrase), req.Confirm)
 	if err != nil {
 		return Receipt{}, refuse("confirmation failed: %v", err)
 	}
+	req.Confirmation = stamp
 	if strings.TrimSpace(typed) != phrase {
 		return Receipt{}, refuse("confirmation phrase did not match; nothing was changed")
 	}
@@ -181,6 +193,10 @@ func (r *Runner) Resolve(req ResolveRequest) (Receipt, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	next := current
 	next.State = req.State
+	if req.Confirmation.Channel == "" {
+		req.Confirmation.Channel = ChannelTerminal
+	}
+	next.Confirmation = req.Confirmation
 	next.Resolutions = append(append([]Resolution(nil), current.Resolutions...), Resolution{
 		From:  from,
 		To:    req.State,
