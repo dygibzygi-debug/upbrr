@@ -204,6 +204,7 @@ func RenderSeedStatus(w io.Writer, results []SeedStatusResult) {
 var HistoryHeader = []string{
 	"release", "tracker", "state", "ptt_id", "torrent_url", "data_match", "moderation",
 	"moderation_checked_at", "started_at", "finished_at", "fingerprint", "tm_info_hash",
+	"channel", "who", "ip", "session",
 }
 
 // WriteHistory writes every receipt as one CSV row to path (mode 0644: no
@@ -235,6 +236,7 @@ func (r *Runner) WriteHistory(path string) (int, error) {
 		_ = w.Write([]string{
 			rc.Release, rc.Tracker, rc.State, rc.TorrentID, rc.TorrentURL, match, rc.Moderation,
 			rc.ModerationCheckedAt, rc.StartedAt, rc.FinishedAt, rc.Fingerprint, rc.InfoHash,
+			rc.Confirmation.Channel, rc.Confirmation.Who, rc.Confirmation.IP, rc.Confirmation.Session,
 		})
 	}
 	w.Flush()

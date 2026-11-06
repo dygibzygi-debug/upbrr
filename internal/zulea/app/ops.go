@@ -419,7 +419,9 @@ func (r *Runner) Seed(ctx context.Context, req SeedRequest, client seed.Client) 
 	if err != nil {
 		return res, fmt.Errorf("zulea: %w", err)
 	}
-	if res.SeedSource != "" {
+	// P3: a later seed of a torrent this CLI already added must not rewrite
+	// seed_source from cli to manual. An empty field is filled once.
+	if receipt.SeedSource == "" && res.SeedSource != "" {
 		receipt.SeedSource = res.SeedSource
 		if werr := writeReceipt(r.receiptPath(req.Release), receipt, false); werr != nil {
 			return res, werr
@@ -457,6 +459,12 @@ func (r *Runner) writeText(sub, name, text string) error {
 // StartSeedVerified starts the release's torrent in qBittorrent only when it
 // is fully checked (100%).
 func (r *Runner) StartSeedVerified(ctx context.Context, release string) (seed.Result, error) {
+	return r.StartSeedVerifiedFile(ctx, release, "")
+}
+
+// StartSeedVerifiedFile is StartSeedVerified. confirmationPath, when set,
+// replaces the terminal and is consumed only when the torrent is already at 100%.
+func (r *Runner) StartSeedVerifiedFile(ctx context.Context, release, confirmationPath string) (seed.Result, error) {
 	q := r.Config.QBittorrent
 	if q == nil {
 		return seed.Result{}, errors.New("seed: qbittorrent is not configured")
@@ -475,6 +483,23 @@ func (r *Runner) StartSeedVerified(ctx context.Context, release string) (seed.Re
 	if err != nil {
 		return seed.Result{}, fmt.Errorf("seed: registered torrent: %w", err)
 	}
+	stamp := ConfirmationStamp{Channel: ChannelTerminal}
+	if confirmationPath != "" {
+		phrase, perr := SeedStartPhrase(desc.InfoHash)
+		if perr != nil {
+			return seed.Result{}, perr
+		}
+		file, cerr := ConsumeConfirmation(confirmationPath, ConfirmationExpect{
+			Command: "seed",
+			Release: release,
+			SHA:     desc.InfoHash,
+			Phrase:  phrase,
+		}, time.Now())
+		if cerr != nil {
+			return seed.Result{}, fmt.Errorf("seed: %w", cerr)
+		}
+		stamp = file.Stamp()
+	}
 	password, err := r.qbitPassword()
 	if err != nil {
 		return seed.Result{}, fmt.Errorf("seed: qbittorrent password: %w", err)
@@ -482,6 +507,12 @@ func (r *Runner) StartSeedVerified(ctx context.Context, release string) (seed.Re
 	res, err := seed.StartVerified(ctx, seed.NewQBit(q.Host, q.Username, password), desc.InfoHash)
 	if err != nil {
 		return res, fmt.Errorf("zulea: %w", err)
+	}
+	if res.Started {
+		receipt.SeedConfirmation = stamp
+		if werr := writeReceipt(r.receiptPath(release), receipt, false); werr != nil {
+			return res, werr
+		}
 	}
 	return res, nil
 }

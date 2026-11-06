@@ -5,4 +5,4 @@ package app
 
 // Version is the zulea-upbrr release. `version` prints it and dupe-accept
 // stores it in every recorded decision.
-const Version = "0.6.2"
+const Version = "0.7.0"

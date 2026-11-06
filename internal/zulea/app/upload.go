@@ -70,7 +70,27 @@ type Receipt struct {
 	// opened the gate for this upload. They are empty when the search was CLEAR.
 	DupeAcceptPath string `json:"dupe_accept_path,omitempty"`
 	DupeAcceptSHA  string `json:"dupe_accept_sha,omitempty"`
+	// Confirmation records who confirmed the upload or resolve, when known.
+	Confirmation ConfirmationStamp `json:"confirmation,omitempty"`
+	// SeedConfirmation records who confirmed seed --start-verified.
+	// It does not change SeedSource.
+	SeedConfirmation ConfirmationStamp `json:"seed_confirmation,omitempty"`
 }
+
+// ConfirmationStamp is the person and channel behind a confirmation.
+// A terminal confirmation leaves who, ip and session empty.
+type ConfirmationStamp struct {
+	Channel string `json:"channel,omitempty"`
+	Who     string `json:"who,omitempty"`
+	IP      string `json:"ip,omitempty"`
+	Session string `json:"session,omitempty"`
+}
+
+// Channels for a confirmation.
+const (
+	ChannelTerminal = "terminal"
+	ChannelPanel    = "panel"
+)
 
 // UploadRequest is one human-initiated canary upload.
 type UploadRequest struct {
@@ -81,6 +101,10 @@ type UploadRequest struct {
 	Preview io.Writer
 	// Confirm shows prompt and returns what the human typed.
 	Confirm func(prompt string) (string, error)
+	// ConfirmationPath is the panel file that replaces the terminal prompt.
+	ConfirmationPath string
+	// Confirmation is stored on the receipt. Channel terminal is the default.
+	Confirmation ConfirmationStamp
 }
 
 // UploadResult is the outcome of a submitted upload.
@@ -113,7 +137,7 @@ func (r *Runner) Upload(ctx context.Context, req UploadRequest) (UploadResult, e
 	if !fingerprintPattern.MatchString(fingerprint) {
 		return UploadResult{}, refuse("a full 64-character dry-run fingerprint is required")
 	}
-	if req.Confirm == nil || req.Preview == nil {
+	if req.Preview == nil || (req.Confirm == nil && req.ConfirmationPath == "") {
 		return UploadResult{}, refuse("interactive confirmation is required")
 	}
 	if err := r.checkNoReceipt(req.Release); err != nil {
@@ -145,10 +169,16 @@ func (r *Runner) Upload(ctx context.Context, req UploadRequest) (UploadResult, e
 		)
 	}
 	phrase := ConfirmationPhrase(fingerprint)
-	typed, err := req.Confirm(fmt.Sprintf("Wysłać %s na PTT? Wpisz dokładnie: %s\n> ", req.Release, phrase))
+	typed, stamp, err := takePhrase(req.ConfirmationPath, ConfirmationExpect{
+		Command:     "upload",
+		Release:     req.Release,
+		Fingerprint: fingerprint,
+		Phrase:      phrase,
+	}, fmt.Sprintf("Wysłać %s na PTT? Wpisz dokładnie: %s\n> ", req.Release, phrase), req.Confirm)
 	if err != nil {
 		return UploadResult{}, refuse("confirmation failed: %v", err)
 	}
+	req.Confirmation = stamp
 	if strings.TrimSpace(typed) != phrase {
 		return UploadResult{}, refuse("confirmation phrase did not match; nothing was sent")
 	}
@@ -162,14 +192,20 @@ func (r *Runner) Upload(ctx context.Context, req UploadRequest) (UploadResult, e
 	}
 	defer upload.Release()
 
-	receipt := Receipt{
-		Release:     req.Release,
-		Tracker:     outcome.Tracker,
-		Fingerprint: plan.Fingerprint,
-		InfoHash:    plan.TMInfoHash,
-		State:       ReceiptAttempted,
-		StartedAt:   time.Now().UTC().Format(time.RFC3339),
+	channel := req.Confirmation.Channel
+	if channel == "" {
+		channel = ChannelTerminal
 	}
+	receipt := Receipt{
+		Release:      req.Release,
+		Tracker:      outcome.Tracker,
+		Fingerprint:  plan.Fingerprint,
+		InfoHash:     plan.TMInfoHash,
+		State:        ReceiptAttempted,
+		StartedAt:    time.Now().UTC().Format(time.RFC3339),
+		Confirmation: req.Confirmation,
+	}
+	receipt.Confirmation.Channel = channel
 	if outcome.Acceptance != nil {
 		receipt.DupeAcceptPath = outcome.Acceptance.Path
 		receipt.DupeAcceptSHA = outcome.Acceptance.SHA
