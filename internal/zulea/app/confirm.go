@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -86,11 +87,22 @@ func takePhrase(path string, expect ConfirmationExpect, prompt string, confirm f
 
 // ConsumeConfirmation checks path and renames it to .used-… before the
 // command runs. A second use fails because the original path is gone.
+//
+// The file is opened once with O_NOFOLLOW. Type, mode, owner and mtime come
+// from fstat on that descriptor, and the bytes are read from it. The parent
+// directory must be mode 0700 and owned by the current user.
 func ConsumeConfirmation(path string, expect ConfirmationExpect, now time.Time) (ConfirmationFile, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return ConfirmationFile{}, fmt.Errorf("confirmation file: %w", err)
+	if strings.HasPrefix(filepath.Base(path), ".used-") {
+		return ConfirmationFile{}, errors.New("confirmation file was already used")
 	}
+	if err := confirmDirectory(filepath.Dir(path)); err != nil {
+		return ConfirmationFile{}, err
+	}
+	file, info, err := openConfirmation(path)
+	if err != nil {
+		return ConfirmationFile{}, err
+	}
+	defer file.Close()
 	if info.Mode()&fs.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return ConfirmationFile{}, errors.New("confirmation file must be a regular file")
 	}
@@ -104,30 +116,30 @@ func ConsumeConfirmation(path string, expect ConfirmationExpect, now time.Time) 
 	if age > confirmationMaxAge || info.ModTime().After(now.Add(time.Minute)) {
 		return ConfirmationFile{}, errors.New("confirmation file is older than 5 minutes or not yet valid")
 	}
-	if strings.HasPrefix(filepath.Base(path), ".used-") {
-		return ConfirmationFile{}, errors.New("confirmation file was already used")
-	}
-	data, err := os.ReadFile(path)
+	data, err := io.ReadAll(io.LimitReader(file, 8193))
 	if err != nil {
 		return ConfirmationFile{}, fmt.Errorf("confirmation file: %w", err)
 	}
 	if len(data) > 8192 {
 		return ConfirmationFile{}, errors.New("confirmation file is too large")
 	}
-	var file ConfirmationFile
+	var parsed ConfirmationFile
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&file); err != nil {
+	if err := dec.Decode(&parsed); err != nil {
 		return ConfirmationFile{}, fmt.Errorf("confirmation file: %w", err)
 	}
-	if err := file.matches(expect); err != nil {
+	if err := parsed.matches(expect); err != nil {
 		return ConfirmationFile{}, err
+	}
+	if err := file.Close(); err != nil {
+		return ConfirmationFile{}, fmt.Errorf("confirmation file: %w", err)
 	}
 	used := filepath.Join(filepath.Dir(path), ".used-"+filepath.Base(path)+"-"+now.UTC().Format("20060102T150405Z"))
 	if err := os.Rename(path, used); err != nil {
 		return ConfirmationFile{}, fmt.Errorf("confirmation file: %w", err)
 	}
-	return file, nil
+	return parsed, nil
 }
 
 func (f ConfirmationFile) matches(expect ConfirmationExpect) error {

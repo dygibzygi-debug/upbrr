@@ -69,6 +69,11 @@ func TestConfirmationFileRules(t *testing.T) {
 		t.Skip("confirmation file mode 0600 is a Linux contract; Windows does not store Unix permission bits")
 	}
 	dir := t.TempDir()
+	// TempDir follows the process umask, so pin the confirmation directory
+	// to the 0700 contract before any file is accepted.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(dir, "upload.json")
 	fp := strings.Repeat("ab", 32)
 	phrase := ConfirmationPhrase(fp)
@@ -178,6 +183,34 @@ func TestConfirmationFileRules(t *testing.T) {
 		Phrase:  seedPhrase,
 	}, time.Now()); err != nil {
 		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "target.json")
+	writeConfirm(t, target, body, 0o600)
+	link := filepath.Join(dir, "link.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ConsumeConfirmation(link, ConfirmationExpect{
+		Command:     "upload",
+		Release:     "Example-GRP",
+		Fingerprint: fp,
+		Phrase:      phrase,
+	}, time.Now()); err == nil {
+		t.Fatal("a symlink confirmation file must be refused")
+	}
+	loose := filepath.Join(dir, "loose")
+	if err := os.Mkdir(loose, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	looseFile := filepath.Join(loose, "upload.json")
+	writeConfirm(t, looseFile, body, 0o600)
+	if _, err := ConsumeConfirmation(looseFile, ConfirmationExpect{
+		Command:     "upload",
+		Release:     "Example-GRP",
+		Fingerprint: fp,
+		Phrase:      phrase,
+	}, time.Now()); err == nil || !strings.Contains(err.Error(), "0700") {
+		t.Fatalf("directory mode 0755 must be refused, got %v", err)
 	}
 }
 
