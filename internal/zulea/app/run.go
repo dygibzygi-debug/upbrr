@@ -453,6 +453,7 @@ func render(w io.Writer, outcomes []Outcome) {
 			fmt.Fprintf(w, "  %-8s %s (%d B, sha256 %s)\n", f.Field, f.Path, f.Size, f.SHA256)
 		}
 		fmt.Fprintf(w, "infohash: %s (TM: %s)\n", p.InfoHash, p.TMInfoHash)
+		fmt.Fprintf(w, "opis SHA-256: surowy=%s końcowy=%s\n", p.RawDescriptionSHA256, p.DescriptionSHA256)
 		fmt.Fprintf(w, "ID PTT potwierdzone: %t\n", p.TaxonomyConfirmed)
 		renderDupe(w, o.Dupe, o.Acceptance)
 		for _, warning := range p.Warnings {

@@ -161,6 +161,12 @@ func TestPrepareStops(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
+		"description CR": func(t *testing.T, env *zuleatest.Env) {
+			path := filepath.Join(env.ReleaseDir, zuleatest.Release+".cinemamovies.txt")
+			if err := os.WriteFile(path, []byte(strings.Replace(zuleatest.Description, "\n", "\r\n", 1)), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
 		"description missing": func(t *testing.T, env *zuleatest.Env) {
 			if err := os.Remove(filepath.Join(env.ReleaseDir, zuleatest.Release+".cinemamovies.txt")); err != nil {
 				t.Fatal(err)

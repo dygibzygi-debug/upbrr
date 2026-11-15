@@ -45,6 +45,10 @@ type Receipt struct {
 	Release     string `json:"release"`
 	Tracker     string `json:"tracker"`
 	Fingerprint string `json:"fingerprint"`
+	// RawDescriptionSHA256 proves the library source; DescriptionSHA256 proves
+	// the exact description sent to PTT after the narrow Zulea transformation.
+	RawDescriptionSHA256 string `json:"raw_description_sha256,omitempty"`
+	DescriptionSHA256    string `json:"description_sha256,omitempty"`
 	// InfoHash is the TM torrent v1 infohash. PTT rewrites the info dictionary
 	// (source and entropy), so the copy that qBittorrent actually seeds has a
 	// different infohash. Seed matches that registered file, never this field.
@@ -163,12 +167,14 @@ func (r *Runner) Upload(ctx context.Context, req UploadRequest) (UploadResult, e
 	defer upload.Release()
 
 	receipt := Receipt{
-		Release:     req.Release,
-		Tracker:     outcome.Tracker,
-		Fingerprint: plan.Fingerprint,
-		InfoHash:    plan.TMInfoHash,
-		State:       ReceiptAttempted,
-		StartedAt:   time.Now().UTC().Format(time.RFC3339),
+		Release:              req.Release,
+		Tracker:              outcome.Tracker,
+		Fingerprint:          plan.Fingerprint,
+		RawDescriptionSHA256: plan.RawDescriptionSHA256,
+		DescriptionSHA256:    plan.DescriptionSHA256,
+		InfoHash:             plan.TMInfoHash,
+		State:                ReceiptAttempted,
+		StartedAt:            time.Now().UTC().Format(time.RFC3339),
 	}
 	if outcome.Acceptance != nil {
 		receipt.DupeAcceptPath = outcome.Acceptance.Path

@@ -202,6 +202,9 @@ func TestUploadCanaryEndToEnd(t *testing.T) {
 	if err := json.Unmarshal(data, &receipt); err != nil || receipt.State != ReceiptAccepted || receipt.DataMatch == nil || !*receipt.DataMatch {
 		t.Fatalf("receipt %s", data)
 	}
+	if receipt.RawDescriptionSHA256 == "" || receipt.DescriptionSHA256 == "" {
+		t.Fatalf("receipt lacks description SHA evidence: %s", data)
+	}
 	if strings.Contains(string(data), pttKey) || strings.Contains(string(data), "torrent/download") {
 		t.Fatal("receipt must not contain the key or the private download URL")
 	}

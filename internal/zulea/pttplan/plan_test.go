@@ -6,11 +6,14 @@ package pttplan
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -103,6 +106,22 @@ func options(t *testing.T, env *zuleatest.Env, logger *captureLogger) (Options, 
 	}, movies
 }
 
+func descriptionPath(env *zuleatest.Env) string {
+	return filepath.Join(env.ReleaseDir, zuleatest.Release+".cinemamovies.txt")
+}
+
+func writeDescription(t *testing.T, env *zuleatest.Env, text string) {
+	t.Helper()
+	if err := os.WriteFile(descriptionPath(env), []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func textSHA256(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
+}
+
 func TestBuildPTTDryRunThroughUpbrr(t *testing.T) {
 	env := zuleatest.New(t, zuleatest.Options{})
 	logger := &captureLogger{}
@@ -126,6 +145,9 @@ func TestBuildPTTDryRunThroughUpbrr(t *testing.T) {
 	}
 	if plan.Payload["description"] != strings.TrimSpace(string(file)) {
 		t.Fatalf("description changed:\n%q\nvs\n%q", plan.Payload["description"], string(file))
+	}
+	if plan.RawDescriptionSHA256 != textSHA256(string(file)) || plan.DescriptionSHA256 != textSHA256(plan.Payload["description"]) {
+		t.Fatalf("description SHA evidence raw=%s final=%s", plan.RawDescriptionSHA256, plan.DescriptionSHA256)
 	}
 	// Mandatory: TM torrent accepted with unchanged info (same infohash), no source, no announce.
 	if plan.InfoHash != env.InfoHash || plan.TMInfoHash != env.InfoHash {
@@ -198,6 +220,57 @@ func TestBuildPTTDryRunThroughUpbrr(t *testing.T) {
 				t.Fatalf("log leaks secret: %s", line)
 			}
 		}
+	}
+}
+
+func TestBuildStripsOnlyEmptyFilmwebRatingBeforePayload(t *testing.T) {
+	env := zuleatest.New(t, zuleatest.Options{})
+	const before = "[b]OCENY[/b]\n[pre]\n" +
+		"Filmweb .... : ___/10   (wpisz recznie)\n" +
+		"IMDb ....... : 6.4/10\nTMDB ....... : 6.8/10\n[/pre]\n"
+	const want = "[b]OCENY[/b]\n[pre]\n" +
+		"IMDb ....... : 6.4/10\nTMDB ....... : 6.8/10\n[/pre]"
+	writeDescription(t, env, before)
+	opts, _ := options(t, env, &captureLogger{})
+	plan, err := Build(context.Background(), prepared(t, env), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Payload["description"] != want || plan.Description != want {
+		t.Fatalf("final description:\n%q\nwant:\n%q", plan.Payload["description"], want)
+	}
+	if plan.RawDescriptionSHA256 != textSHA256(before) || plan.DescriptionSHA256 != textSHA256(want) {
+		t.Fatalf("description SHA evidence raw=%s final=%s", plan.RawDescriptionSHA256, plan.DescriptionSHA256)
+	}
+	if !slices.Contains(plan.Warnings, "usunięto pustą ocenę Filmweb") {
+		t.Fatalf("warnings %q", plan.Warnings)
+	}
+}
+
+func TestRawDescriptionEvidenceChangesFingerprint(t *testing.T) {
+	const placeholder = "[pre]\nFilmweb .... : ___/10   (wpisz recznie)\nIMDb ....... : 6.4/10\n[/pre]\n"
+	const clean = "[pre]\nIMDb ....... : 6.4/10\n[/pre]\n"
+
+	envWith := zuleatest.New(t, zuleatest.Options{})
+	writeDescription(t, envWith, placeholder)
+	optsWith, _ := options(t, envWith, &captureLogger{})
+	withPlaceholder, err := Build(context.Background(), prepared(t, envWith), optsWith)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	envClean := zuleatest.New(t, zuleatest.Options{})
+	writeDescription(t, envClean, clean)
+	optsClean, _ := options(t, envClean, &captureLogger{})
+	withoutPlaceholder, err := Build(context.Background(), prepared(t, envClean), optsClean)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withPlaceholder.Description != withoutPlaceholder.Description {
+		t.Fatal("both inputs must converge to the same final payload description")
+	}
+	if withPlaceholder.Fingerprint == withoutPlaceholder.Fingerprint {
+		t.Fatal("raw source SHA evidence must distinguish placeholder and already-clean inputs")
 	}
 }
 

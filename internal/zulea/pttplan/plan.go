@@ -27,6 +27,7 @@ import (
 	"github.com/autobrr/upbrr/internal/trackers"
 	"github.com/autobrr/upbrr/internal/trackers/impl"
 	"github.com/autobrr/upbrr/internal/zulea/input"
+	"github.com/autobrr/upbrr/internal/zulea/pttdesc"
 	"github.com/autobrr/upbrr/internal/zulea/tm"
 	"github.com/autobrr/upbrr/internal/zulea/tmdb"
 	"github.com/autobrr/upbrr/pkg/api"
@@ -97,9 +98,13 @@ type Plan struct {
 	Title       string            `json:"title"`
 	Payload     map[string]string `json:"payload"`
 	Description string            `json:"-"`
-	Files       []File            `json:"files"`
-	InfoHash    string            `json:"info_hash"`
-	TMInfoHash  string            `json:"tm_info_hash"`
+	// RawDescriptionSHA256 proves the byte-identical library input. DescriptionSHA256
+	// proves the exact, possibly transformed description in the PTT payload.
+	RawDescriptionSHA256 string `json:"raw_description_sha256"`
+	DescriptionSHA256    string `json:"description_sha256"`
+	Files                []File `json:"files"`
+	InfoHash             string `json:"info_hash"`
+	TMInfoHash           string `json:"tm_info_hash"`
 	// TaxonomyConfirmed reports whether owner-confirmed PTT IDs were checked.
 	TaxonomyConfirmed bool     `json:"taxonomy_confirmed"`
 	Warnings          []string `json:"warnings"`
@@ -175,6 +180,10 @@ func build(ctx context.Context, prepared *input.Prepared, opts Options, intent t
 	}
 	var warnings []string
 	warnings = append(warnings, prepared.Warnings...)
+	description, strippedFilmweb := pttdesc.StripEmptyFilmwebRating(prepared.Description)
+	if strippedFilmweb {
+		warnings = append(warnings, "usunięto pustą ocenę Filmweb")
+	}
 
 	movie, err := opts.Movies.Movie(ctx, prepared.Record.TMDBID)
 	if err != nil {
@@ -254,7 +263,7 @@ func build(ctx context.Context, prepared *input.Prepared, opts Options, intent t
 		},
 		Runtime: runtime,
 		Logger:  logger,
-		Assets:  &trackers.DescriptionAssets{Description: prepared.Description, Final: true},
+		Assets:  &trackers.DescriptionAssets{Description: description, Final: true},
 	})
 	if failure != nil {
 		return nil, none, reject("upbrr PTT preparation: %s", failure.Error())
@@ -267,18 +276,21 @@ func build(ctx context.Context, prepared *input.Prepared, opts Options, intent t
 	}()
 	entry := plan.DryRun()
 	out := &Plan{
-		Release:    prepared.Release,
-		Tracker:    entry.Tracker,
-		Endpoint:   entry.Endpoint,
-		Status:     entry.Status,
-		Message:    entry.Message,
-		Title:      entry.Payload["name"],
-		Payload:    entry.Payload,
-		TMInfoHash: prepared.Manifest.InfoHash,
+		Release:              prepared.Release,
+		Tracker:              entry.Tracker,
+		Endpoint:             entry.Endpoint,
+		Status:               entry.Status,
+		Message:              entry.Message,
+		Title:                entry.Payload["name"],
+		Payload:              entry.Payload,
+		RawDescriptionSHA256: prepared.DescriptionSHA256,
+		TMInfoHash:           prepared.Manifest.InfoHash,
 	}
-	if out.Description, err = verifyEntry(entry, prepared, title, uploadPath, tmdbID); err != nil {
+	if out.Description, err = verifyEntry(entry, prepared, description, title, uploadPath, tmdbID); err != nil {
 		return nil, none, err
 	}
+	descriptionSum := sha256.Sum256([]byte(out.Description))
+	out.DescriptionSHA256 = hex.EncodeToString(descriptionSum[:])
 	if out.Files, err = fileEvidence(entry.Files); err != nil {
 		return nil, none, err
 	}
@@ -314,7 +326,7 @@ func build(ctx context.Context, prepared *input.Prepared, opts Options, intent t
 }
 
 // verifyEntry enforces that upbrr kept every Zulea input intact.
-func verifyEntry(entry api.TrackerDryRunEntry, prepared *input.Prepared, title, uploadPath string, tmdbID int) (string, error) {
+func verifyEntry(entry api.TrackerDryRunEntry, prepared *input.Prepared, description, title, uploadPath string, tmdbID int) (string, error) {
 	if entry.Status != "ready" {
 		return "", reject("upbrr dry-run status %q: %s", entry.Status, entry.Message)
 	}
@@ -322,7 +334,7 @@ func verifyEntry(entry api.TrackerDryRunEntry, prepared *input.Prepared, title, 
 		return "", reject("payload name %q differs from the names.py title %q", got, title)
 	}
 	// upbrr trims surrounding whitespace of a final description; nothing else may change.
-	wantDescription := strings.TrimSpace(prepared.Description)
+	wantDescription := strings.TrimSpace(description)
 	if entry.Payload["description"] != wantDescription || entry.Description != wantDescription {
 		return "", reject("payload description differs from the ready description file")
 	}
@@ -454,17 +466,21 @@ func fingerprintDocument(p *Plan, acceptanceSHA string) ([]byte, error) {
 		files = append(files, [3]string{f.Field, strconv.FormatInt(f.Size, 10), f.SHA256})
 	}
 	data, err := json.Marshal(struct {
-		Tracker       string      `json:"tracker"`
-		Endpoint      string      `json:"endpoint"`
-		Fields        [][2]string `json:"fields"`
-		Files         [][3]string `json:"files"`
-		AcceptanceSHA string      `json:"acceptance_sha,omitempty"`
+		Tracker              string      `json:"tracker"`
+		Endpoint             string      `json:"endpoint"`
+		Fields               [][2]string `json:"fields"`
+		Files                [][3]string `json:"files"`
+		RawDescriptionSHA256 string      `json:"raw_description_sha256"`
+		DescriptionSHA256    string      `json:"description_sha256"`
+		AcceptanceSHA        string      `json:"acceptance_sha,omitempty"`
 	}{
-		Tracker:       p.Tracker,
-		Endpoint:      p.Endpoint,
-		Fields:        fields,
-		Files:         files,
-		AcceptanceSHA: acceptanceSHA,
+		Tracker:              p.Tracker,
+		Endpoint:             p.Endpoint,
+		Fields:               fields,
+		Files:                files,
+		RawDescriptionSHA256: p.RawDescriptionSHA256,
+		DescriptionSHA256:    p.DescriptionSHA256,
+		AcceptanceSHA:        acceptanceSHA,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pttplan: fingerprint: %w", err)
