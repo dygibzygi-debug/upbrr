@@ -26,7 +26,7 @@ import (
 
 // ContractVersion changes whenever prepared fact semantics or the private seed
 // contract become incompatible, forcing persisted generations to be recomputed.
-const ContractVersion = "prepared-release-v74"
+const ContractVersion = "prepared-release-v77"
 
 // Store is the prepared-release persistence port. Implementations must commit
 // facts, identity, and provider metadata as one generation transaction.
@@ -318,7 +318,12 @@ func (m *Module) PrepareResolved(ctx context.Context, resolved api.ResolvedPrepa
 				"A compatible prepared generation is required.",
 			),
 		)
-		return api.PrepareResult{}, errors.New("prepared release: compatible prepared generation is required")
+		return api.PrepareResult{}, api.NewOperationError(api.OperationFailure{
+			Code:      api.OperationFailureIncompatibleGeneration,
+			Operation: api.OperationKindPreparation,
+			Message:   "A compatible prepared generation is required. Prepare the input again.",
+			Recovery:  api.OperationRecoveryReprepare,
+		}, &IncompatiblePreparationError{SourcePath: input.SourcePath, Reason: "compatible prepared generation is required"})
 	}
 	api.EmitPreparationProgress(
 		ctx,
