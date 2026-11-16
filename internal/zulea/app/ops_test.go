@@ -261,6 +261,19 @@ func TestSeedAfterAcceptedUpload(t *testing.T) {
 	if err != nil || receipt.SeedSource != seed.SeedSourceCLI {
 		t.Fatalf("receipt seed source %+v %v", receipt, err)
 	}
+	again, err := runner.Seed(context.Background(), SeedRequest{
+		Release: zuleatest.Release,
+		Wait:    1e9,
+		Poll:    1e6,
+		Start:   true,
+	}, qb)
+	if err != nil || again.Added || !again.AlreadyExists || again.SeedSource != seed.SeedSourceManual {
+		t.Fatalf("second seed should see the existing torrent: %+v %v", again, err)
+	}
+	receipt, err = runner.readReceipt(zuleatest.Release)
+	if err != nil || receipt.SeedSource != seed.SeedSourceCLI {
+		t.Fatalf("P3: seed_source must stay cli, got %+v %v", receipt.SeedSource, err)
+	}
 }
 
 func TestSeedMatchesPTTInfoHashNotTM(t *testing.T) {

@@ -79,10 +79,10 @@ Użycie:
   zulea-upbrr version
 
 Kody wyjścia: 0 wszystko READY, 3 co najmniej jeden STOP, 2 błąd użycia/konfiguracji, 1 błąd wykonania.
-Upload działa tylko interaktywnie w terminalu: świeży dry-run, zgodny fingerprint, otwarta bramka canary
-i ręcznie wpisana fraza potwierdzenia. Nie ma trybu bez pytania. Nic nie trafia do klienta torrent.
-dupe-accept też wymaga terminala. Czyta ostatni raport scan-ptt albo plan, nie łączy się z trackerem
-i nie ma flagi --force. Bramkę otwiera tylko zgodny zestaw kandydatów (DUPLICATE albo REVIEW).
+Upload, dupe-accept, resolve i seed --start-verified wymagają terminala albo --confirmation-file.
+--json daje stabilny dokument schema_version bez sekretów. Nie ma --force. Nic nie omija bramek.
+dupe-accept czyta ostatni raport scan-ptt albo plan, nie łączy się z trackerem.
+Bramkę otwiera tylko zgodny zestaw kandydatów (DUPLICATE albo REVIEW).
 `)
 }
 
@@ -161,6 +161,7 @@ func runPlan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	configPath := fs.String("config", "", "plik konfiguracji JSON (0600)")
 	listPath := fs.String("list", "", "plik z listą wydań (jedno na linię)")
 	debug := fs.Bool("debug", false, "logi DEBUG/TRACE na stderr")
+	asJSON := fs.Bool("json", false, "stabilny JSON (schema_version) zamiast tekstu")
 	var releases multiFlag
 	fs.Var(&releases, "release", "nazwa wydania (można powtarzać)")
 	if err := fs.Parse(args); err != nil {
@@ -186,6 +187,21 @@ func runPlan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	logger := app.NewLogger(stderr, *debug)
 	runner := &app.Runner{Config: cfg, Logger: logger}
 	outcomes, err := runner.DryRun(ctx, releases)
+	code := exitOK
+	if err != nil {
+		code = exitRuntime
+		if len(outcomes) > 0 {
+			code = exitStop
+		}
+	}
+	for _, o := range outcomes {
+		if o.Status != app.StatusReady {
+			code = exitStop
+		}
+	}
+	if *asJSON {
+		return writeCommandJSON(stdout, stderr, "plan", code, outcomes, err, logger)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "zulea-upbrr plan: %s\n", logger.Sanitize(err.Error()))
 		if len(outcomes) == 0 {
@@ -193,15 +209,7 @@ func runPlan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	app.Render(stdout, outcomes, logger.MaskKnown)
-	for _, o := range outcomes {
-		if o.Status != app.StatusReady {
-			return exitStop
-		}
-	}
-	if err != nil {
-		return exitRuntime
-	}
-	return exitOK
+	return code
 }
 
 func runCheckConfig(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -322,12 +330,14 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer, std
 	configPath := fs.String("config", "", "plik konfiguracji JSON (0600)")
 	release := fs.String("release", "", "jedno wydanie (canary)")
 	fingerprint := fs.String("fingerprint", "", "pełny fingerprint przejrzanego dry-run (64 znaki)")
+	confirmationPath := fs.String("confirmation-file", "", "plik potwierdzenia panelu zamiast terminala")
+	asJSON := fs.Bool("json", false, "stabilny JSON (schema_version) zamiast tekstu")
 	if err := fs.Parse(args); err != nil || *configPath == "" || *release == "" || *fingerprint == "" || fs.NArg() != 0 {
 		fmt.Fprintln(stderr, "zulea-upbrr upload: wymagane --config, --release i --fingerprint")
 		return exitUsage
 	}
-	if !isTerminal(stdin) {
-		fmt.Fprintln(stderr, "zulea-upbrr upload: wymagany interaktywny terminal — potwierdzenia nie można podać przez potok ani plik")
+	if *confirmationPath == "" && !isTerminal(stdin) {
+		fmt.Fprintln(stderr, "zulea-upbrr upload: wymagany interaktywny terminal albo --confirmation-file")
 		return exitUsage
 	}
 	cfg, err := app.LoadConfig(*configPath)
@@ -338,10 +348,12 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer, std
 	logger := app.NewLogger(stderr, false)
 	runner := &app.Runner{Config: cfg, Logger: logger}
 	reader := bufio.NewReader(stdin)
+	preview := commandPreview(*asJSON, stdout)
 	result, err := runner.Upload(ctx, app.UploadRequest{
-		Release:     *release,
-		Fingerprint: *fingerprint,
-		Preview:     stdout,
+		Release:          *release,
+		Fingerprint:      *fingerprint,
+		Preview:          preview,
+		ConfirmationPath: *confirmationPath,
 		Confirm: func(prompt string) (string, error) {
 			fmt.Fprint(stdout, prompt)
 			line, rerr := reader.ReadString('\n')
@@ -351,6 +363,31 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer, std
 			return line, nil
 		},
 	})
+	if *asJSON {
+		rc := result.Receipt
+		rc.RegisteredTorrent = ""
+		view := struct {
+			Receipt         app.Receipt `json:"receipt"`
+			DataMatch       bool        `json:"data_match"`
+			NamesMatch      bool        `json:"names_match"`
+			InfoHashChanged bool        `json:"info_hash_changed"`
+		}{Receipt: rc}
+		if result.Comparison != nil {
+			view.DataMatch = result.Comparison.DataMatch
+			view.NamesMatch = result.Comparison.NamesMatch
+			view.InfoHashChanged = result.Comparison.InfoHashChanged
+		}
+		code := exitOK
+		if err != nil {
+			code = exitRuntime
+			if errors.Is(err, app.ErrUploadRefused) {
+				code = exitUsage
+			}
+		} else if result.Comparison == nil || !result.Comparison.OK() {
+			code = exitStop
+		}
+		return writeCommandJSON(stdout, stderr, "upload", code, view, err, logger)
+	}
 	if result.Comparison != nil {
 		fmt.Fprintln(stdout, logger.MaskKnown(result.Comparison.Report()))
 	}
@@ -374,30 +411,38 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer, std
 }
 
 func runResolve(args []string, stdout, stderr io.Writer, stdin *os.File) int {
-	if !isTerminal(stdin) {
-		fmt.Fprintln(stderr, "zulea-upbrr resolve: wymagany interaktywny terminal — decyzji nie można podać przez potok ani plik")
+	fs := flag.NewFlagSet("resolve", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	configPath := fs.String("config", "", "plik konfiguracji JSON (0600)")
+	release := fs.String("release", "", "nazwa wydania")
+	state := fs.String("state", "", "wynik sprawdzony na PTT: not_sent, accepted albo rejected")
+	pttID := fs.String("ptt-id", "", "ID torrenta na PTT (tylko z --state accepted)")
+	note := fs.String("note", "", "jak sprawdzono wynik (zapisywane w pokwitowaniu)")
+	confirmationPath := fs.String("confirmation-file", "", "plik potwierdzenia panelu zamiast terminala")
+	asJSON := fs.Bool("json", false, "stabilny JSON (schema_version) zamiast tekstu")
+	if err := fs.Parse(args); err != nil || *configPath == "" || *release == "" || *state == "" || fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "zulea-upbrr resolve: wymagane --config, --release, --state i --note")
 		return exitUsage
 	}
-	var release, state, pttID, note string
-	cfg, ok := loadConfigFlag("resolve", args, stderr, func(fs *flag.FlagSet) {
-		fs.StringVar(&release, "release", "", "nazwa wydania")
-		fs.StringVar(&state, "state", "", "wynik sprawdzony na PTT: not_sent, accepted albo rejected")
-		fs.StringVar(&pttID, "ptt-id", "", "ID torrenta na PTT (tylko z --state accepted)")
-		fs.StringVar(&note, "note", "", "jak sprawdzono wynik (zapisywane w pokwitowaniu)")
-	})
-	if !ok || release == "" || state == "" {
-		if ok {
-			fmt.Fprintln(stderr, "zulea-upbrr resolve: wymagane --release, --state i --note")
-		}
+	if *confirmationPath == "" && !isTerminal(stdin) {
+		fmt.Fprintln(stderr, "zulea-upbrr resolve: wymagany interaktywny terminal albo --confirmation-file")
 		return exitUsage
 	}
+	cfg, err := app.LoadConfig(*configPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr resolve: %v\n", err)
+		return exitUsage
+	}
+	logger := app.NewLogger(stderr, false)
 	reader := bufio.NewReader(stdin)
-	receipt, err := (&app.Runner{Config: cfg}).Resolve(app.ResolveRequest{
-		Release: release,
-		State:   state,
-		PTTID:   pttID,
-		Note:    note,
-		Preview: stdout,
+	preview := commandPreview(*asJSON, stdout)
+	receipt, err := (&app.Runner{Config: cfg, Logger: logger}).Resolve(app.ResolveRequest{
+		Release:          *release,
+		State:            *state,
+		PTTID:            *pttID,
+		Note:             *note,
+		Preview:          preview,
+		ConfirmationPath: *confirmationPath,
 		Confirm: func(prompt string) (string, error) {
 			fmt.Fprint(stdout, prompt)
 			line, rerr := reader.ReadString('\n')
@@ -407,6 +452,17 @@ func runResolve(args []string, stdout, stderr io.Writer, stdin *os.File) int {
 			return line, nil
 		},
 	})
+	if *asJSON {
+		receipt.RegisteredTorrent = ""
+		code := exitOK
+		if err != nil {
+			code = exitRuntime
+			if errors.Is(err, app.ErrUploadRefused) {
+				code = exitUsage
+			}
+		}
+		return writeCommandJSON(stdout, stderr, "resolve", code, receipt, err, logger)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "zulea-upbrr resolve: %v\n", err)
 		if errors.Is(err, app.ErrUploadRefused) {
@@ -414,7 +470,7 @@ func runResolve(args []string, stdout, stderr io.Writer, stdin *os.File) int {
 		}
 		return exitRuntime
 	}
-	fmt.Fprintf(stdout, "ROZSTRZYGNIĘTO: %s -> %s\n", release, receipt.State)
+	fmt.Fprintf(stdout, "ROZSTRZYGNIĘTO: %s -> %s\n", *release, receipt.State)
 	if receipt.State == app.ReceiptAccepted {
 		fmt.Fprintln(stdout, "Dalej: ptt-status (kolejka czeka na APPROVED); verify-uploaded porówna torrent z PTT z TM.")
 	}
@@ -428,12 +484,14 @@ func runDupeAccept(args []string, stdout, stderr io.Writer, stdin *os.File) int 
 	release := fs.String("release", "", "jedno wydanie")
 	reason := fs.String("reason", "", "dlaczego ten zestaw kandydatów może wejść (albo dlaczego wycofujesz)")
 	revoke := fs.Bool("revoke", false, "wycofaj zapisaną akceptację")
+	confirmationPath := fs.String("confirmation-file", "", "plik potwierdzenia panelu zamiast terminala")
+	asJSON := fs.Bool("json", false, "stabilny JSON (schema_version) zamiast tekstu")
 	if err := fs.Parse(args); err != nil || *configPath == "" || *release == "" || strings.TrimSpace(*reason) == "" || fs.NArg() != 0 {
 		fmt.Fprintln(stderr, "zulea-upbrr dupe-accept: wymagane --config, --release i --reason")
 		return exitUsage
 	}
-	if !isTerminal(stdin) {
-		fmt.Fprintln(stderr, "zulea-upbrr dupe-accept: wymagany interaktywny terminal — decyzji nie można podać przez potok ani plik")
+	if *confirmationPath == "" && !isTerminal(stdin) {
+		fmt.Fprintln(stderr, "zulea-upbrr dupe-accept: wymagany interaktywny terminal albo --confirmation-file")
 		return exitUsage
 	}
 	cfg, err := app.LoadConfig(*configPath)
@@ -443,11 +501,13 @@ func runDupeAccept(args []string, stdout, stderr io.Writer, stdin *os.File) int 
 	}
 	logger := app.NewLogger(stderr, false)
 	reader := bufio.NewReader(stdin)
+	preview := commandPreview(*asJSON, stdout)
 	record, err := (&app.Runner{Config: cfg, Logger: logger}).DupeAccept(app.DupeAcceptRequest{
-		Release: *release,
-		Reason:  *reason,
-		Revoke:  *revoke,
-		Preview: stdout,
+		Release:          *release,
+		Reason:           *reason,
+		Revoke:           *revoke,
+		Preview:          preview,
+		ConfirmationPath: *confirmationPath,
 		Confirm: func(prompt string) (string, error) {
 			fmt.Fprint(stdout, prompt)
 			line, rerr := reader.ReadString('\n')
@@ -457,6 +517,16 @@ func runDupeAccept(args []string, stdout, stderr io.Writer, stdin *os.File) int 
 			return line, nil
 		},
 	})
+	if *asJSON {
+		code := exitOK
+		if err != nil {
+			code = exitRuntime
+			if errors.Is(err, app.ErrUploadRefused) {
+				code = exitUsage
+			}
+		}
+		return writeCommandJSON(stdout, stderr, "dupe-accept", code, record, err, logger)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "zulea-upbrr dupe-accept: %s\n", logger.Sanitize(err.Error()))
 		if errors.Is(err, app.ErrUploadRefused) {
@@ -522,9 +592,11 @@ func loadConfigFlag(name string, args []string, stderr io.Writer, register func(
 func runCheck(args []string, stdout, stderr io.Writer) int {
 	var releases multiFlag
 	var listPath string
+	var asJSON bool
 	cfg, ok := loadConfigFlag("check", args, stderr, func(fs *flag.FlagSet) {
 		fs.Var(&releases, "release", "nazwa wydania (można powtarzać)")
 		fs.StringVar(&listPath, "list", "", "plik z listą wydań")
+		fs.BoolVar(&asJSON, "json", false, "stabilny JSON (schema_version) zamiast tekstu")
 	})
 	if !ok {
 		return exitUsage
@@ -538,15 +610,21 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 		releases = append(releases, listed...)
 	}
 	summary, err := (&app.Runner{Config: cfg}).Check(releases)
+	code := exitOK
+	if err != nil {
+		code = exitRuntime
+	} else if summary.Stop > 0 {
+		code = exitStop
+	}
+	if asJSON {
+		return writeCommandJSON(stdout, stderr, "check", code, summary, err, nil)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "zulea-upbrr check: %v\n", err)
 		return exitRuntime
 	}
 	app.RenderCheck(stdout, summary)
-	if summary.Stop > 0 {
-		return exitStop
-	}
-	return exitOK
+	return code
 }
 
 func runVerifyIdentity(args []string, stdout, stderr io.Writer) int {
@@ -573,11 +651,21 @@ func runVerifyIdentity(args []string, stdout, stderr io.Writer) int {
 }
 
 func runReceipts(args []string, stdout, stderr io.Writer) int {
-	cfg, ok := loadConfigFlag("receipts", args, stderr, nil)
+	var asJSON bool
+	cfg, ok := loadConfigFlag("receipts", args, stderr, func(fs *flag.FlagSet) {
+		fs.BoolVar(&asJSON, "json", false, "stabilny JSON (schema_version) zamiast tekstu")
+	})
 	if !ok {
 		return exitUsage
 	}
 	list, err := (&app.Runner{Config: cfg}).Receipts()
+	if asJSON {
+		code := exitOK
+		if err != nil {
+			code = exitRuntime
+		}
+		return writeCommandJSON(stdout, stderr, "receipts", code, list, err, nil)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "zulea-upbrr receipts: %v\n", err)
 		return exitRuntime
@@ -595,6 +683,7 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	configPath := fs.String("config", "", "plik konfiguracji JSON (0600)")
 	fs.Var(&releases, "release", "nazwa wydania (można powtarzać)")
 	fs.StringVar(&listPath, "list", "", "plik z listą wydań")
+	asJSON := fs.Bool("json", false, "stabilny JSON (schema_version) zamiast tekstu")
 	fs.DurationVar(&delay, "delay", delay, "odstęp między wydaniami (co najmniej 3s)")
 	if err := fs.Parse(args); err != nil || *configPath == "" || fs.NArg() != 0 {
 		fmt.Fprintln(stderr, "zulea-upbrr scan-ptt: wymagane --config")
@@ -619,6 +708,13 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	logger := app.NewLogger(stderr, false)
 	summary, err := (&app.Runner{Config: cfg, Logger: logger}).ScanPTT(ctx, releases, delay)
+	code := exitOK
+	if err != nil {
+		code = exitRuntime
+	}
+	if *asJSON {
+		return writeCommandJSON(stdout, stderr, "scan-ptt", code, summary, err, logger)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "zulea-upbrr scan-ptt: %s\n", logger.Sanitize(err.Error()))
 		if len(summary.Results) > 0 {
@@ -632,13 +728,27 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 func runQueue(args []string, stdout, stderr io.Writer) int {
 	limit := 20
+	var asJSON bool
 	cfg, ok := loadConfigFlag("queue", args, stderr, func(fs *flag.FlagSet) {
 		fs.IntVar(&limit, "limit", limit, "ile pozycji pokazać (0 = wszystkie)")
+		fs.BoolVar(&asJSON, "json", false, "stabilny JSON (schema_version) zamiast tekstu")
 	})
 	if !ok {
 		return exitUsage
 	}
 	entries, scanPath, err := (&app.Runner{Config: cfg}).Queue()
+	if asJSON {
+		view := app.QueueView{Entries: entries, Scan: scanPath}
+		code := exitOK
+		if errors.Is(err, app.ErrQueueBlocked) {
+			view.Blocked = err.Error()
+			code = exitStop
+			err = nil
+		} else if err != nil {
+			code = exitRuntime
+		}
+		return writeCommandJSON(stdout, stderr, "queue", code, view, err, nil)
+	}
 	if errors.Is(err, app.ErrQueueBlocked) {
 		fmt.Fprintf(stderr, "zulea-upbrr queue: kolejka wstrzymana: %v\n", err)
 		return exitStop
@@ -678,14 +788,16 @@ func runVerifyUploaded(ctx context.Context, args []string, stdout, stderr io.Wri
 }
 
 func runSeed(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	var release string
+	var release, confirmationPath string
 	var wait time.Duration
-	var start, startVerified bool
+	var start, startVerified, asJSON bool
 	cfg, ok := loadConfigFlag("seed", args, stderr, func(fs *flag.FlagSet) {
 		fs.StringVar(&release, "release", "", "nazwa wydania z pokwitowaniem accepted")
 		fs.DurationVar(&wait, "wait", 0, "ile czekać na koniec rechecku (np. 30m)")
 		fs.BoolVar(&start, "start", false, "uruchom seed po rechecku, tylko przy 100%")
 		fs.BoolVar(&startVerified, "start-verified", false, "uruchom istniejący torrent, tylko przy 100%")
+		fs.StringVar(&confirmationPath, "confirmation-file", "", "plik potwierdzenia panelu (tylko z --start-verified)")
+		fs.BoolVar(&asJSON, "json", false, "stabilny JSON (schema_version) zamiast tekstu")
 	})
 	if !ok || release == "" {
 		if ok {
@@ -697,14 +809,25 @@ func runSeed(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	runner := &app.Runner{Config: cfg, Logger: logger}
 	var res seed.Result
 	var err error
+	if confirmationPath != "" && !startVerified {
+		fmt.Fprintln(stderr, "zulea-upbrr seed: --confirmation-file jest tylko dla --start-verified")
+		return exitUsage
+	}
 	if startVerified {
-		res, err = runner.StartSeedVerified(ctx, release)
+		res, err = runner.StartSeedVerifiedFile(ctx, release, confirmationPath)
 	} else {
 		res, err = runner.Seed(ctx, app.SeedRequest{
 			Release: release,
 			Wait:    wait,
 			Start:   start,
 		}, nil)
+	}
+	if asJSON {
+		code := exitOK
+		if err != nil {
+			code = exitRuntime
+		}
+		return writeCommandJSON(stdout, stderr, "seed", code, res, err, logger)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "zulea-upbrr seed: %s\n", logger.Sanitize(err.Error()))
@@ -800,56 +923,89 @@ func runTaxonomy(args []string, stdout, stderr io.Writer) int {
 
 func runPTTStatus(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	var releases multiFlag
+	var asJSON bool
 	cfg, ok := loadConfigFlag("ptt-status", args, stderr, func(fs *flag.FlagSet) {
 		fs.Var(&releases, "release", "nazwa wydania (domyślnie wszystkie accepted)")
+		fs.BoolVar(&asJSON, "json", false, "stabilny JSON (schema_version) zamiast tekstu")
 	})
 	if !ok {
 		return exitUsage
 	}
 	logger := app.NewLogger(stderr, false)
 	results, err := (&app.Runner{Config: cfg, Logger: logger}).PTTStatus(ctx, releases)
+	code := exitOK
+	if err != nil {
+		code = exitRuntime
+	}
+	for _, r := range results {
+		if r.State != "APPROVED" {
+			code = exitStop
+		}
+	}
+	if asJSON {
+		return writeCommandJSON(stdout, stderr, "ptt-status", code, results, err, logger)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "zulea-upbrr ptt-status: %s\n", logger.Sanitize(err.Error()))
 		return exitRuntime
 	}
 	app.RenderStatus(stdout, results)
-	for _, r := range results {
-		if r.State != "APPROVED" {
-			return exitStop
-		}
-	}
-	return exitOK
+	return code
 }
 
 func runSeedStatus(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	cfg, ok := loadConfigFlag("seed-status", args, stderr, nil)
+	var asJSON bool
+	cfg, ok := loadConfigFlag("seed-status", args, stderr, func(fs *flag.FlagSet) {
+		fs.BoolVar(&asJSON, "json", false, "stabilny JSON (schema_version) zamiast tekstu")
+	})
 	if !ok {
 		return exitUsage
 	}
 	logger := app.NewLogger(stderr, false)
 	results, err := (&app.Runner{Config: cfg, Logger: logger}).SeedStatus(ctx, nil)
+	code := exitOK
+	if err != nil {
+		code = exitRuntime
+	}
+	for _, r := range results {
+		if r.Seed != app.SeedSeeding {
+			code = exitStop
+		}
+	}
+	if asJSON {
+		return writeCommandJSON(stdout, stderr, "seed-status", code, results, err, logger)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "zulea-upbrr seed-status: %s\n", logger.Sanitize(err.Error()))
 		return exitRuntime
 	}
 	app.RenderSeedStatus(stdout, results)
-	for _, r := range results {
-		if r.Seed != app.SeedSeeding {
-			return exitStop
-		}
-	}
-	return exitOK
+	return code
 }
 
 func runHistory(args []string, stdout, stderr io.Writer) int {
 	var out string
+	var asJSON bool
 	cfg, ok := loadConfigFlag("history", args, stderr, func(fs *flag.FlagSet) {
 		fs.StringVar(&out, "out", "", "plik CSV (domyślnie work/history/zulea-upbrr-history.csv)")
+		fs.BoolVar(&asJSON, "json", false, "stabilny JSON (schema_version) zamiast tekstu")
 	})
 	if !ok {
 		return exitUsage
 	}
-	n, err := (&app.Runner{Config: cfg}).WriteHistory(out)
+	runner := &app.Runner{Config: cfg}
+	n, err := runner.WriteHistory(out)
+	if asJSON {
+		list, lerr := runner.Receipts()
+		if err == nil {
+			err = lerr
+		}
+		code := exitOK
+		if err != nil {
+			code = exitRuntime
+		}
+		return writeCommandJSON(stdout, stderr, "history", code, app.HistoryView{Count: n, Receipts: list}, err, nil)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "zulea-upbrr history: %v\n", err)
 		return exitRuntime
@@ -859,10 +1015,11 @@ func runHistory(args []string, stdout, stderr io.Writer) int {
 }
 
 func runSummary(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	var withSeed, send bool
+	var withSeed, send, asJSON bool
 	cfg, ok := loadConfigFlag("summary", args, stderr, func(fs *flag.FlagSet) {
 		fs.BoolVar(&withSeed, "with-seed", false, "sprawdź też stan seedu w qBittorrencie")
 		fs.BoolVar(&send, "notify", false, "wyślij do skonfigurowanych kanałów (Discord/Telegram)")
+		fs.BoolVar(&asJSON, "json", false, "stabilny JSON (schema_version) zamiast tekstu")
 	})
 	if !ok {
 		return exitUsage
@@ -879,6 +1036,15 @@ func runSummary(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		client = c
 	}
 	summary, err := runner.BuildSummary(ctx, client)
+	code := exitOK
+	if err != nil {
+		code = exitRuntime
+	} else if summary.Attention {
+		code = exitStop
+	}
+	if asJSON {
+		return writeCommandJSON(stdout, stderr, "summary", code, summary, err, logger)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "zulea-upbrr summary: %s\n", logger.Sanitize(err.Error()))
 		return exitRuntime
