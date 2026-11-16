@@ -157,6 +157,14 @@ func TestNightlyReceiptAndSeedAlerts(t *testing.T) {
 	}
 }
 
+func TestNightlyHandledElsewhereDoesNotRaiseAttention(t *testing.T) {
+	prev := nightlyState{OK: []string{"Handled-GRP"}}
+	lines, attention, next := nightlyChainDelta(prev, true, []CheckResult{{Release: "Handled-GRP", Status: StatusHandledElsewhere}})
+	if attention || len(lines) != 0 || len(next) != 1 || next[0] != "Handled-GRP" {
+		t.Fatalf("handled elsewhere must stay quiet: lines=%v attention=%t next=%v", lines, attention, next)
+	}
+}
+
 func writeCheckFile(t *testing.T, work, name string, summary CheckSummary) {
 	t.Helper()
 	dir := filepath.Join(work, "reports")

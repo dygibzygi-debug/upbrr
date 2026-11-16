@@ -39,6 +39,8 @@ type Outcome struct {
 	// Description is the exact description text upbrr would send.
 	Description string `json:"description,omitempty"`
 	ReportPath  string `json:"report_path,omitempty"`
+	// HandledElsewhere explains an offline STOP before any tracker request.
+	HandledElsewhere *HandledElsewhereEntry `json:"handled_elsewhere,omitempty"`
 }
 
 // CanaryGate reports readiness for a first, human-confirmed upload (stage 3).
@@ -140,6 +142,8 @@ type Runner struct {
 	MediaInfo pttplan.MediaInfoSource
 	// SkipDupe disables the duplicate check (tests of unrelated behavior).
 	SkipDupe bool
+	// HandledElsewherePath overrides /inputs/handled-elsewhere.json in tests.
+	HandledElsewherePath string
 }
 
 // movieCache performs at most one TMDB request per frozen id per run.
@@ -361,17 +365,49 @@ func (r *Runner) checkDupes(ctx context.Context, sess *session, prepared *input.
 // DryRun prepares and plans every release for PTT. A failure of one release
 // is a STOP for that release only; the others continue.
 func (r *Runner) DryRun(ctx context.Context, releases []string) ([]Outcome, error) {
-	sess, err := r.open(releases)
+	handled, err := r.loadHandledElsewhere()
 	if err != nil {
-		return nil, err
+		outcomes := make([]Outcome, 0, len(releases))
+		for _, rel := range releases {
+			outcome := Outcome{Release: rel, Tracker: input.PTT.Tracker, Status: StatusStop, Reason: err.Error()}
+			path, werr := r.writeReport(outcome)
+			if werr != nil {
+				return outcomes, werr
+			}
+			outcome.ReportPath = path
+			outcomes = append(outcomes, outcome)
+		}
+		return outcomes, nil
 	}
-	sess.logger.Evidencef("zulea: dry-run start trackers=PTT releases=%d freeze_sha256=%s", len(releases), sess.adapter.Freeze().SHA256)
+	active := make([]string, 0, len(releases))
+	for _, rel := range releases {
+		if _, ok := handled[rel]; !ok {
+			active = append(active, rel)
+		}
+	}
+	var sess *session
+	if len(active) > 0 {
+		sess, err = r.open(active)
+		if err != nil {
+			return nil, err
+		}
+		sess.logger.Evidencef("zulea: dry-run start trackers=PTT releases=%d freeze_sha256=%s", len(releases), sess.adapter.Freeze().SHA256)
+	}
 	outcomes := make([]Outcome, 0, len(releases))
 	for _, rel := range releases {
 		if err := ctx.Err(); err != nil {
 			return outcomes, fmt.Errorf("zulea: dry-run canceled: %w", err)
 		}
-		outcome, _ := r.evaluate(ctx, sess, rel)
+		var outcome Outcome
+		if entry, ok := handled[rel]; ok {
+			copy := entry
+			outcome = Outcome{
+				Release: rel, Tracker: input.PTT.Tracker, Status: StatusStop,
+				Reason: handledElsewhereReason(entry), HandledElsewhere: &copy,
+			}
+		} else {
+			outcome, _ = r.evaluate(ctx, sess, rel)
+		}
 		path, werr := r.writeReport(outcome)
 		if werr != nil {
 			return outcomes, werr

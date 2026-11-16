@@ -48,3 +48,20 @@ func TestStripEmptyFilmwebRatingRequiresTrailingLF(t *testing.T) {
 		t.Fatalf("unterminated line changed=%t got=%q", changed, got)
 	}
 }
+
+func TestStripEmptyFilmwebRatingRequiresLineStart(t *testing.T) {
+	const input = "prefix Filmweb .... : ___/10   (wpisz recznie)\nIMDb ....... : 6.4/10\n"
+	got, changed := StripEmptyFilmwebRating(input)
+	if changed || got != input {
+		t.Fatalf("same-line prefix changed=%t got=%q", changed, got)
+	}
+}
+
+func TestStripEmptyFilmwebRatingAtTextStart(t *testing.T) {
+	const input = "Filmweb .... : ___/10   (wpisz recznie)\nIMDb ....... : 6.4/10\n"
+	const want = "IMDb ....... : 6.4/10\n"
+	got, changed := StripEmptyFilmwebRating(input)
+	if !changed || got != want {
+		t.Fatalf("first line changed=%t got=%q want=%q", changed, got, want)
+	}
+}

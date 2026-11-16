@@ -212,6 +212,15 @@ func TestConfirmationFileRules(t *testing.T) {
 	}, time.Now()); err == nil || !strings.Contains(err.Error(), "0700") {
 		t.Fatalf("directory mode 0755 must be refused, got %v", err)
 	}
+	large := filepath.Join(dir, "large.json")
+	if err := os.WriteFile(large, bytes.Repeat([]byte("x"), 8193), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ConsumeConfirmation(large, ConfirmationExpect{
+		Command: "upload", Release: "Example-GRP", Fingerprint: fp, Phrase: phrase,
+	}, time.Now()); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("file larger than 8 KiB must be refused from fstat, got %v", err)
+	}
 }
 
 func TestSeedResultJSONOmitsPassword(t *testing.T) {

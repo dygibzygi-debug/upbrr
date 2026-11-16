@@ -20,14 +20,28 @@ import (
 
 // Summary is a short, secret-free status digest for notifications.
 type Summary struct {
-	Text string
+	Text string `json:"text"`
 	// Attention is true when something needs a human (STOP, review, seed problems, waiting approval).
-	Attention bool
+	Attention bool `json:"attention"`
+	HandledElsewhere []HandledElsewhereEntry `json:"handled_elsewhere,omitempty"`
 }
 
 // BuildSummary condenses the latest check and scan reports, receipts,
 // moderation and (when client is non-nil) seeding state.
 func (r *Runner) BuildSummary(ctx context.Context, client seed.Client) (Summary, error) {
+	handledMap, err := r.loadHandledElsewhere()
+	if err != nil {
+		return Summary{}, err
+	}
+	handledNames := make([]string, 0, len(handledMap))
+	for release := range handledMap {
+		handledNames = append(handledNames, release)
+	}
+	sort.Strings(handledNames)
+	handledEntries := make([]HandledElsewhereEntry, 0, len(handledNames))
+	for _, release := range handledNames {
+		handledEntries = append(handledEntries, handledMap[release])
+	}
 	now := time.Now().UTC()
 	var lines []string
 	attention := false
@@ -40,7 +54,7 @@ func (r *Runner) BuildSummary(ctx context.Context, client seed.Client) (Summary,
 		if readJSON(path, &c) == nil {
 			checkLoaded = true
 			checkResults = c.Results
-			lines = append(lines, fmt.Sprintf("Łańcuch: OK=%d STOP=%d (pominięte %d)", c.OK, c.Stop, c.Skipped))
+			lines = append(lines, fmt.Sprintf("Łańcuch: OK=%d STOP=%d HANDLED_ELSEWHERE=%d (pominięte %d)", c.OK, c.Stop, c.HandledElsewhere, c.Skipped))
 		}
 	}
 	prev, hasPrev, err := r.readNightlyState()
@@ -89,7 +103,16 @@ func (r *Runner) BuildSummary(ctx context.Context, client seed.Client) (Summary,
 		lines = append(lines, fmt.Sprintf("Kolejka wstrzymana: %d pokwitowań wymaga uwagi (receipts, ptt-status, resolve)", len(blocked)))
 	}
 	if entries, _, qerr := r.Queue(); qerr == nil {
-		lines = append(lines, fmt.Sprintf("Kolejka: %d wydań gotowych", len(entries)))
+		ready, handled := 0, 0
+		for _, entry := range entries {
+			switch entry.State {
+			case StatusReady:
+				ready++
+			case StatusHandledElsewhere:
+				handled++
+			}
+		}
+		lines = append(lines, fmt.Sprintf("Kolejka: %d wydań gotowych; HANDLED_ELSEWHERE=%d", ready, handled))
 	}
 	if client != nil {
 		results, serr := r.SeedStatus(ctx, client)
@@ -119,7 +142,7 @@ func (r *Runner) BuildSummary(ctx context.Context, client seed.Client) (Summary,
 	if attention {
 		lines = append(lines, "Wymaga uwagi — szczegóły w raportach work/reports.")
 	}
-	return Summary{Text: strings.Join(lines, "\n"), Attention: attention}, nil
+	return Summary{Text: strings.Join(lines, "\n"), Attention: attention, HandledElsewhere: handledEntries}, nil
 }
 
 func readJSON(path string, v any) error {

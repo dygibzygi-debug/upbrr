@@ -137,6 +137,9 @@ func (r *Runner) receiptPath(release string) string {
 // After acceptance it compares the torrent downloaded from PTT with the TM
 // torrent. It never adds anything to a torrent client.
 func (r *Runner) Upload(ctx context.Context, req UploadRequest) (UploadResult, error) {
+	if err := r.refuseHandledElsewhere(req.Release); err != nil {
+		return UploadResult{}, refuse("%v", err)
+	}
 	fingerprint := strings.TrimSpace(req.Fingerprint)
 	if !fingerprintPattern.MatchString(fingerprint) {
 		return UploadResult{}, refuse("a full 64-character dry-run fingerprint is required")

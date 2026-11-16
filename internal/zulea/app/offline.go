@@ -31,14 +31,16 @@ type CheckResult struct {
 	Images   int    `json:"images,omitempty"`
 	// Warnings are non-blocking findings (e.g. names.py title warnings).
 	Warnings []string `json:"warnings,omitempty"`
+	HandledElsewhere *HandledElsewhereEntry `json:"handled_elsewhere,omitempty"`
 }
 
 // CheckSummary is the result of Check.
 type CheckSummary struct {
 	FreezeSHA256 string        `json:"freeze_sha256"`
-	Results      []CheckResult `json:"results"`
-	OK           int           `json:"ok"`
-	Stop         int           `json:"stop"`
+	Results          []CheckResult `json:"results"`
+	OK               int           `json:"ok"`
+	Stop             int           `json:"stop"`
+	HandledElsewhere int           `json:"handled_elsewhere"`
 	// Skipped counts freeze releases without an OK record (e.g. WYJATEK), when checking all.
 	Skipped    int    `json:"skipped"`
 	ReportPath string `json:"report_path,omitempty"`
@@ -66,6 +68,10 @@ func (r *Runner) openAdapter() (*input.Adapter, error) {
 // TM manifest and torrent, title) for releases, without any network access.
 // With no releases it checks every freeze release that has an OK record.
 func (r *Runner) Check(releases []string) (CheckSummary, error) {
+	handled, err := r.loadHandledElsewhere()
+	if err != nil {
+		return CheckSummary{}, err
+	}
 	adapter, err := r.openAdapter()
 	if err != nil {
 		return CheckSummary{}, err
@@ -82,6 +88,13 @@ func (r *Runner) Check(releases []string) (CheckSummary, error) {
 		}
 	}
 	for _, rel := range releases {
+		if entry, ok := handled[rel]; ok {
+			copy := entry
+			result := CheckResult{Release: rel, Status: StatusHandledElsewhere, Reason: handledElsewhereReason(entry), HandledElsewhere: &copy}
+			summary.HandledElsewhere++
+			summary.Results = append(summary.Results, result)
+			continue
+		}
 		result := CheckResult{Release: rel, Status: "STOP"}
 		prepared, perr := adapter.Prepare(rel, input.PTT)
 		if perr != nil {
@@ -122,7 +135,7 @@ func RenderCheck(w io.Writer, s CheckSummary) {
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", r.Status, r.Release, dash(r.RunID), r.Images, detail)
 	}
 	_ = tw.Flush()
-	_, _ = fmt.Fprintf(w, "\nPODSUMOWANIE: OK=%d STOP=%d pominięte (bez statusu OK w zamrożeniu)=%d; bez sieci.\n", s.OK, s.Stop, s.Skipped)
+	_, _ = fmt.Fprintf(w, "\nPODSUMOWANIE: OK=%d STOP=%d HANDLED_ELSEWHERE=%d pominięte (bez statusu OK w zamrożeniu)=%d; bez sieci.\n", s.OK, s.Stop, s.HandledElsewhere, s.Skipped)
 	if s.ReportPath != "" {
 		_, _ = fmt.Fprintf(w, "raport: %s (+ .md)\n", s.ReportPath)
 	}

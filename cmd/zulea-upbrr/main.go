@@ -237,12 +237,22 @@ func runCheckConfig(ctx context.Context, args []string, stdout, stderr io.Writer
 		"  ID PTT potwierdzone (W-1): %t\n  personal_release (D-5): %s\n  mod_queue (D-5): %t\n  nocny scan-ptt: %s\n",
 		strings.Join(cfg.Trackers, ","), cfg.PhysicalDisk, cfg.DiskCheckMode, cfg.MediaInfo.Source,
 		cfg.PTT.Taxonomy != nil, personal, cfg.PTT.ModQueue, scan)
+	logger := app.NewLogger(stderr, false)
+	runner := &app.Runner{Config: cfg, Logger: logger}
+	handled, err := runner.ValidateHandledElsewhere()
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr check-config: %s\n", logger.Sanitize(err.Error()))
+		return exitUsage
+	}
+	fmt.Fprintf(stdout, "  handled-elsewhere: %d wpisów\n", handled.Entries)
+	for _, warning := range handled.Warnings {
+		fmt.Fprintf(stdout, "OSTRZEŻENIE: %s\n", warning)
+	}
 	if cfg.QBittorrent == nil {
 		fmt.Fprintln(stdout, "  qBittorrent: nie skonfigurowano")
 		return exitOK
 	}
-	logger := app.NewLogger(stderr, false)
-	probe, err := (&app.Runner{Config: cfg, Logger: logger}).CheckQBit(ctx, nil)
+	probe, err := runner.CheckQBit(ctx, nil)
 	if err != nil {
 		fmt.Fprintf(stderr, "zulea-upbrr check-config: %s\n", logger.Sanitize(err.Error()))
 		return exitRuntime

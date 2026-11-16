@@ -63,7 +63,7 @@ func nightlyChainDelta(prev nightlyState, hasPrev bool, results []CheckResult) (
 	okSet := map[string]struct{}{}
 	for _, result := range results {
 		switch result.Status {
-		case "OK":
+		case "OK", StatusHandledElsewhere:
 			next = append(next, result.Release)
 			okSet[result.Release] = struct{}{}
 		case "STOP":

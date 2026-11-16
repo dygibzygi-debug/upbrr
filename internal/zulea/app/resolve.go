@@ -127,6 +127,9 @@ func allowedResolution(from, to string, rc Receipt) bool {
 // tracker and never uploads. It requires the typed phrase bound to the shown
 // receipt and keeps the full decision history in the receipt.
 func (r *Runner) Resolve(req ResolveRequest) (Receipt, error) {
+	if err := r.refuseHandledElsewhere(req.Release); err != nil {
+		return Receipt{}, refuse("%v", err)
+	}
 	if req.Preview == nil || (req.Confirm == nil && req.ConfirmationPath == "") {
 		return Receipt{}, refuse("interactive confirmation is required")
 	}

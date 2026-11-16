@@ -43,11 +43,11 @@ func CheckMarkdown(s CheckSummary) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Gotowość biblioteki — łańcuch dowodów (bez sieci)\n\n")
 	fmt.Fprintf(&b, "Zamrożenie SHA-256: `%s`\n\n", s.FreezeSHA256)
-	fmt.Fprintf(&b, "| OK | STOP | pominięte (bez statusu OK) |\n|---|---|---|\n| %d | %d | %d |\n\n", s.OK, s.Stop, s.Skipped)
+	fmt.Fprintf(&b, "| OK | STOP | HANDLED_ELSEWHERE | pominięte (bez statusu OK) |\n|---|---|---|---|\n| %d | %d | %d | %d |\n\n", s.OK, s.Stop, s.HandledElsewhere, s.Skipped)
 	classes := map[string]int{}
 	warned := 0
 	for _, r := range s.Results {
-		if r.Status != "OK" {
+		if r.Status == "STOP" {
 			classes[classify(r.Reason)]++
 		}
 		if len(r.Warnings) > 0 {
@@ -68,7 +68,16 @@ func CheckMarkdown(s CheckSummary) string {
 		}
 		b.WriteString("\n### Wydania ze STOP\n\n| Wydanie | Powód |\n|---|---|\n")
 		for _, r := range s.Results {
-			if r.Status != "OK" {
+			if r.Status == "STOP" {
+				fmt.Fprintf(&b, "| `%s` | %s |\n", r.Release, mdEscape(r.Reason))
+			}
+		}
+		b.WriteString("\n")
+	}
+	if s.HandledElsewhere > 0 {
+		b.WriteString("## Obsłużone innym narzędziem\n\n| Wydanie | Szczegóły |\n|---|---|\n")
+		for _, r := range s.Results {
+			if r.Status == StatusHandledElsewhere {
 				fmt.Fprintf(&b, "| `%s` | %s |\n", r.Release, mdEscape(r.Reason))
 			}
 		}
@@ -105,6 +114,7 @@ func ScanMarkdown(s ScanSummary) string {
 		fmt.Fprintf(&b, "| %s | %d |\n", k, s.Counts[k])
 	}
 	sections := []struct{ title, status string }{
+		{"Obsłużone innym narzędziem", StatusHandledElsewhere},
 		{"Wolne na PTT (CLEAR) — kandydaci do uploadu", "CLEAR"},
 		{"Już na PTT (DUPLICATE)", "DUPLICATE"},
 		{"Do ręcznej oceny (REVIEW)", "REVIEW"},
@@ -114,7 +124,7 @@ func ScanMarkdown(s ScanSummary) string {
 		fmt.Fprintf(&b, "\n## %s\n\n| Wydanie | Szczegóły |\n|---|---|\n", sec.title)
 		for _, r := range s.Results {
 			match := r.Dupe == sec.status || sec.status == "FAILED" && r.Dupe == "NOT_RUN"
-			if r.Chain != "OK" || !match {
+			if (r.Chain != "OK" && r.Chain != StatusHandledElsewhere) || !match {
 				continue
 			}
 			var detail strings.Builder
@@ -127,7 +137,7 @@ func ScanMarkdown(s ScanSummary) string {
 	}
 	b.WriteString("\n## Łańcuch STOP (nie sprawdzano PTT)\n\n| Wydanie | Powód |\n|---|---|\n")
 	for _, r := range s.Results {
-		if r.Chain != "OK" {
+		if r.Chain != "OK" && r.Chain != StatusHandledElsewhere {
 			fmt.Fprintf(&b, "| `%s` | %s |\n", r.Release, mdEscape(r.ChainReason))
 		}
 	}

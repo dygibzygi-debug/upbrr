@@ -112,6 +112,9 @@ func ConsumeConfirmation(path string, expect ConfirmationExpect, now time.Time) 
 	if err := confirmOwner(info); err != nil {
 		return ConfirmationFile{}, err
 	}
+	if info.Size() > 8192 {
+		return ConfirmationFile{}, errors.New("confirmation file is too large")
+	}
 	age := now.Sub(info.ModTime())
 	if age > confirmationMaxAge || info.ModTime().After(now.Add(time.Minute)) {
 		return ConfirmationFile{}, errors.New("confirmation file is older than 5 minutes or not yet valid")

@@ -57,6 +57,9 @@ type releaseFacts struct {
 // DupeAccept records or withdraws a human duplicate acceptance. It reads the
 // latest scan-ptt or plan report and never contacts a tracker.
 func (r *Runner) DupeAccept(req DupeAcceptRequest) (dupeaccept.Record, error) {
+	if err := r.refuseHandledElsewhere(req.Release); err != nil {
+		return dupeaccept.Record{}, refuse("%v", err)
+	}
 	if req.Preview == nil || (req.Confirm == nil && req.ConfirmationPath == "") {
 		return dupeaccept.Record{}, refuse("interactive confirmation is required")
 	}

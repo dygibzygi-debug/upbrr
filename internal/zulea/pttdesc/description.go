@@ -12,8 +12,15 @@ const emptyFilmwebRatingLine = "Filmweb .... : ___/10   (wpisz recznie)\n"
 // rating line. Input validation, including the LF-only requirement, belongs to
 // the input adapter and must run before this transform.
 func StripEmptyFilmwebRating(text string) (string, bool) {
-	if !strings.Contains(text, emptyFilmwebRatingLine) {
-		return text, false
+	changed := false
+	if strings.HasPrefix(text, emptyFilmwebRatingLine) {
+		text = strings.TrimPrefix(text, emptyFilmwebRatingLine)
+		changed = true
 	}
-	return strings.ReplaceAll(text, emptyFilmwebRatingLine, ""), true
+	anchored := "\n" + emptyFilmwebRatingLine
+	if strings.Contains(text, anchored) {
+		text = strings.ReplaceAll(text, anchored, "\n")
+		changed = true
+	}
+	return text, changed
 }

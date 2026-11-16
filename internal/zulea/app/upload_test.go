@@ -205,6 +205,9 @@ func TestUploadCanaryEndToEnd(t *testing.T) {
 	if receipt.RawDescriptionSHA256 == "" || receipt.DescriptionSHA256 == "" {
 		t.Fatalf("receipt lacks description SHA evidence: %s", data)
 	}
+	if receipt.Confirmation.Channel != ChannelTerminal {
+		t.Fatalf("terminal upload channel = %q, want %q", receipt.Confirmation.Channel, ChannelTerminal)
+	}
 	if strings.Contains(string(data), pttKey) || strings.Contains(string(data), "torrent/download") {
 		t.Fatal("receipt must not contain the key or the private download URL")
 	}

@@ -39,6 +39,7 @@ type ScanResult struct {
 	// SearchComplete is false when the duplicate search did not finish. An
 	// acceptance of that result is refused.
 	SearchComplete bool `json:"search_complete"`
+	HandledElsewhere *HandledElsewhereEntry `json:"handled_elsewhere,omitempty"`
 }
 
 // ScanSummary is the result of ScanPTT.
@@ -64,6 +65,10 @@ func (r *Runner) ScanPTT(ctx context.Context, releases []string, delay time.Dura
 		}
 		releases = all
 	}
+	handled, err := r.loadHandledElsewhere()
+	if err != nil {
+		return ScanSummary{}, err
+	}
 	sess, err := r.open(releases)
 	if err != nil {
 		return ScanSummary{}, err
@@ -83,6 +88,16 @@ func (r *Runner) ScanPTT(ctx context.Context, releases []string, delay time.Dura
 				return summary, fmt.Errorf("scan canceled: %w", ctx.Err())
 			case <-time.After(delay):
 			}
+		}
+		if entry, ok := handled[rel]; ok {
+			copy := entry
+			result := ScanResult{
+				Release: rel, Chain: StatusHandledElsewhere, Dupe: StatusHandledElsewhere,
+				Message: handledElsewhereReason(entry), SearchComplete: true, HandledElsewhere: &copy,
+			}
+			summary.Counts[StatusHandledElsewhere]++
+			summary.Results = append(summary.Results, result)
+			continue
 		}
 		result := ScanResult{Release: rel, Chain: "STOP"}
 		prepared, perr := sess.adapter.Prepare(rel, input.PTT)
@@ -186,14 +201,20 @@ func RenderScan(w io.Writer, s ScanSummary) {
 
 // QueueEntry is a release ready for the next human-confirmed upload.
 type QueueEntry struct {
-	Release string `json:"release"`
-	Title   string `json:"title"`
+	Release          string                 `json:"release"`
+	Title            string                 `json:"title,omitempty"`
+	State            string                 `json:"state"`
+	HandledElsewhere *HandledElsewhereEntry `json:"handled_elsewhere,omitempty"`
 }
 
 // Queue lists, in scan order, releases whose latest scan says chain OK and
 // either PTT CLEAR or a human acceptance of that exact candidate set, and
 // which have no upload receipt. It uploads nothing.
 func (r *Runner) Queue() ([]QueueEntry, string, error) {
+	handled, err := r.loadHandledElsewhere()
+	if err != nil {
+		return nil, "", err
+	}
 	scanPath, err := latestReport(filepath.Join(r.Config.WorkDir, "reports"), "scan-", ".json")
 	if err != nil {
 		return nil, "", err
@@ -224,7 +245,14 @@ func (r *Runner) Queue() ([]QueueEntry, string, error) {
 		return nil, scanPath, fmt.Errorf("%w: %s", ErrQueueBlocked, strings.Join(blocked, "; "))
 	}
 	var out []QueueEntry
+	seenHandled := map[string]bool{}
 	for _, res := range scan.Results {
+		if entry, ok := handled[res.Release]; ok {
+			copy := entry
+			out = append(out, QueueEntry{Release: res.Release, Title: res.Title, State: StatusHandledElsewhere, HandledElsewhere: &copy})
+			seenHandled[res.Release] = true
+			continue
+		}
 		if res.Chain != "OK" || done[res.Release] {
 			continue
 		}
@@ -238,8 +266,19 @@ func (r *Runner) Queue() ([]QueueEntry, string, error) {
 			return nil, scanPath, fmt.Errorf("queue: %w", err)
 		}
 		if res.Dupe == pttdupe.StatusClear || matched != nil {
-			out = append(out, QueueEntry{Release: res.Release, Title: res.Title})
+			out = append(out, QueueEntry{Release: res.Release, Title: res.Title, State: StatusReady})
 		}
+	}
+	var remaining []string
+	for release := range handled {
+		if !seenHandled[release] {
+			remaining = append(remaining, release)
+		}
+	}
+	sort.Strings(remaining)
+	for _, release := range remaining {
+		copy := handled[release]
+		out = append(out, QueueEntry{Release: release, State: StatusHandledElsewhere, HandledElsewhere: &copy})
 	}
 	return out, scanPath, nil
 }
@@ -274,7 +313,11 @@ func RenderQueue(w io.Writer, entries []QueueEntry, scanPath string, limit int) 
 			_, _ = fmt.Fprintf(w, "… i %d kolejnych\n", len(entries)-limit)
 			break
 		}
-		_, _ = fmt.Fprintf(w, "%3d. %s\n     %s\n", i+1, e.Release, e.Title)
+		if e.State == StatusHandledElsewhere && e.HandledElsewhere != nil {
+			_, _ = fmt.Fprintf(w, "%3d. [%s] %s\n     %s\n", i+1, e.State, e.Release, handledElsewhereReason(*e.HandledElsewhere))
+			continue
+		}
+		_, _ = fmt.Fprintf(w, "%3d. [%s] %s\n     %s\n", i+1, e.State, e.Release, e.Title)
 	}
 	_, _ = fmt.Fprintln(w, "\nKażde wydanie osobno: zulea-upbrr plan --release <REL> → przegląd → zulea-upbrr upload --release <REL> --fingerprint <FP>.")
 }
@@ -368,6 +411,9 @@ type SeedRequest struct {
 // stopped, with a full recheck (see package seed). It requires an accepted
 // receipt with DANE_ZGODNE=TAK and matching names.
 func (r *Runner) Seed(ctx context.Context, req SeedRequest, client seed.Client) (seed.Result, error) {
+	if err := r.refuseHandledElsewhere(req.Release); err != nil {
+		return seed.Result{}, fmt.Errorf("seed: %w", err)
+	}
 	q := r.Config.QBittorrent
 	if q == nil {
 		return seed.Result{}, errors.New("seed: qbittorrent is not configured")
@@ -465,6 +511,9 @@ func (r *Runner) StartSeedVerified(ctx context.Context, release string) (seed.Re
 // StartSeedVerifiedFile is StartSeedVerified. confirmationPath, when set,
 // replaces the terminal and is consumed only when the torrent is already at 100%.
 func (r *Runner) StartSeedVerifiedFile(ctx context.Context, release, confirmationPath string) (seed.Result, error) {
+	if err := r.refuseHandledElsewhere(release); err != nil {
+		return seed.Result{}, fmt.Errorf("seed: %w", err)
+	}
 	q := r.Config.QBittorrent
 	if q == nil {
 		return seed.Result{}, errors.New("seed: qbittorrent is not configured")
