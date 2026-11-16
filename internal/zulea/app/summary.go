@@ -22,7 +22,7 @@ import (
 type Summary struct {
 	Text string `json:"text"`
 	// Attention is true when something needs a human (STOP, review, seed problems, waiting approval).
-	Attention bool `json:"attention"`
+	Attention        bool                    `json:"attention"`
 	HandledElsewhere []HandledElsewhereEntry `json:"handled_elsewhere,omitempty"`
 }
 

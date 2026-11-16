@@ -405,13 +405,13 @@ func (r *Runner) DryRun(ctx context.Context, releases []string) ([]Outcome, erro
 		}
 		var outcome Outcome
 		if entry, ok := handled[rel]; ok {
-			copy := entry
+			entryCopy := entry
 			outcome = Outcome{
 				Release:          rel,
 				Tracker:          input.PTT.Tracker,
 				Status:           StatusStop,
 				Reason:           handledElsewhereReason(entry),
-				HandledElsewhere: &copy,
+				HandledElsewhere: &entryCopy,
 			}
 		} else {
 			outcome, _ = r.evaluate(ctx, sess, rel)

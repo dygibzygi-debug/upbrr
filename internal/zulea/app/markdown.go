@@ -43,7 +43,14 @@ func CheckMarkdown(s CheckSummary) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Gotowość biblioteki — łańcuch dowodów (bez sieci)\n\n")
 	fmt.Fprintf(&b, "Zamrożenie SHA-256: `%s`\n\n", s.FreezeSHA256)
-	fmt.Fprintf(&b, "| OK | STOP | HANDLED_ELSEWHERE | pominięte (bez statusu OK) |\n|---|---|---|---|\n| %d | %d | %d | %d |\n\n", s.OK, s.Stop, s.HandledElsewhere, s.Skipped)
+	fmt.Fprintf(
+		&b,
+		"| OK | STOP | HANDLED_ELSEWHERE | pominięte (bez statusu OK) |\n|---|---|---|---|\n| %d | %d | %d | %d |\n\n",
+		s.OK,
+		s.Stop,
+		s.HandledElsewhere,
+		s.Skipped,
+	)
 	classes := map[string]int{}
 	warned := 0
 	for _, r := range s.Results {

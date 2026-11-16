@@ -38,7 +38,7 @@ type ScanResult struct {
 	Candidates  []pttdupe.Candidate `json:"candidates,omitempty"`
 	// SearchComplete is false when the duplicate search did not finish. An
 	// acceptance of that result is refused.
-	SearchComplete bool `json:"search_complete"`
+	SearchComplete   bool                   `json:"search_complete"`
 	HandledElsewhere *HandledElsewhereEntry `json:"handled_elsewhere,omitempty"`
 }
 
@@ -90,14 +90,14 @@ func (r *Runner) ScanPTT(ctx context.Context, releases []string, delay time.Dura
 			}
 		}
 		if entry, ok := handled[rel]; ok {
-			copy := entry
+			entryCopy := entry
 			result := ScanResult{
 				Release:          rel,
 				Chain:            StatusHandledElsewhere,
 				Dupe:             StatusHandledElsewhere,
 				Message:          handledElsewhereReason(entry),
 				SearchComplete:   true,
-				HandledElsewhere: &copy,
+				HandledElsewhere: &entryCopy,
 			}
 			summary.Counts[StatusHandledElsewhere]++
 			summary.Results = append(summary.Results, result)
@@ -252,12 +252,12 @@ func (r *Runner) Queue() ([]QueueEntry, string, error) {
 	seenHandled := map[string]bool{}
 	for _, res := range scan.Results {
 		if entry, ok := handled[res.Release]; ok {
-			copy := entry
+			entryCopy := entry
 			out = append(out, QueueEntry{
 				Release:          res.Release,
 				Title:            res.Title,
 				State:            StatusHandledElsewhere,
-				HandledElsewhere: &copy,
+				HandledElsewhere: &entryCopy,
 			})
 			seenHandled[res.Release] = true
 			continue
@@ -290,11 +290,11 @@ func (r *Runner) Queue() ([]QueueEntry, string, error) {
 	}
 	sort.Strings(remaining)
 	for _, release := range remaining {
-		copy := handled[release]
+		entryCopy := handled[release]
 		out = append(out, QueueEntry{
 			Release:          release,
 			State:            StatusHandledElsewhere,
-			HandledElsewhere: &copy,
+			HandledElsewhere: &entryCopy,
 		})
 	}
 	return out, scanPath, nil

@@ -144,10 +144,10 @@ func TestHandledElsewhereHasSeparateQueueState(t *testing.T) {
 		t.Fatal(err)
 	}
 	scan := ScanSummary{Results: []ScanResult{{
-		Release:       zuleatest.Release,
-		Chain:         "OK",
-		Title:         "Synthetic title",
-		Dupe:          "CLEAR",
+		Release:        zuleatest.Release,
+		Chain:          "OK",
+		Title:          "Synthetic title",
+		Dupe:           "CLEAR",
 		SearchComplete: true,
 	}}}
 	data, err := json.Marshal(scan)

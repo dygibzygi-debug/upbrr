@@ -30,13 +30,13 @@ type CheckResult struct {
 	RunID    string `json:"tm_run_id,omitempty"`
 	Images   int    `json:"images,omitempty"`
 	// Warnings are non-blocking findings (e.g. names.py title warnings).
-	Warnings []string `json:"warnings,omitempty"`
+	Warnings         []string               `json:"warnings,omitempty"`
 	HandledElsewhere *HandledElsewhereEntry `json:"handled_elsewhere,omitempty"`
 }
 
 // CheckSummary is the result of Check.
 type CheckSummary struct {
-	FreezeSHA256 string        `json:"freeze_sha256"`
+	FreezeSHA256     string        `json:"freeze_sha256"`
 	Results          []CheckResult `json:"results"`
 	OK               int           `json:"ok"`
 	Stop             int           `json:"stop"`
@@ -89,12 +89,12 @@ func (r *Runner) Check(releases []string) (CheckSummary, error) {
 	}
 	for _, rel := range releases {
 		if entry, ok := handled[rel]; ok {
-			copy := entry
+			entryCopy := entry
 			result := CheckResult{
 				Release:          rel,
 				Status:           StatusHandledElsewhere,
 				Reason:           handledElsewhereReason(entry),
-				HandledElsewhere: &copy,
+				HandledElsewhere: &entryCopy,
 			}
 			summary.HandledElsewhere++
 			summary.Results = append(summary.Results, result)
@@ -140,7 +140,14 @@ func RenderCheck(w io.Writer, s CheckSummary) {
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", r.Status, r.Release, dash(r.RunID), r.Images, detail)
 	}
 	_ = tw.Flush()
-	_, _ = fmt.Fprintf(w, "\nPODSUMOWANIE: OK=%d STOP=%d HANDLED_ELSEWHERE=%d pominięte (bez statusu OK w zamrożeniu)=%d; bez sieci.\n", s.OK, s.Stop, s.HandledElsewhere, s.Skipped)
+	_, _ = fmt.Fprintf(
+		w,
+		"\nPODSUMOWANIE: OK=%d STOP=%d HANDLED_ELSEWHERE=%d pominięte (bez statusu OK w zamrożeniu)=%d; bez sieci.\n",
+		s.OK,
+		s.Stop,
+		s.HandledElsewhere,
+		s.Skipped,
+	)
 	if s.ReportPath != "" {
 		_, _ = fmt.Fprintf(w, "raport: %s (+ .md)\n", s.ReportPath)
 	}
