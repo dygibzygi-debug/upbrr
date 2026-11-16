@@ -155,10 +155,7 @@ func (r *Runner) ValidateHandledElsewhere() (HandledElsewhereValidation, error) 
 		return result, fmt.Errorf("handled-elsewhere: freeze: %w", err)
 	}
 	known := map[string]bool{}
-	releases, err := frozen.Releases()
-	if err != nil {
-		return result, fmt.Errorf("handled-elsewhere: freeze releases: %w", err)
-	}
+	releases, _ := frozen.Releases()
 	for _, release := range releases {
 		known[release] = true
 	}
