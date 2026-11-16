@@ -29,8 +29,12 @@ func writeHandledFile(t *testing.T, path string, entries []HandledElsewhereEntry
 func handledEntry(release string) HandledElsewhereEntry {
 	id := 36025
 	return HandledElsewhereEntry{
-		Release: release, Tracker: "PTT", TorrentID: &id,
-		Tool: "upbrr", Added: "2026-11-15", Note: "sent outside this tool",
+		Release:   release,
+		Tracker:   "PTT",
+		TorrentID: &id,
+		Tool:      "upbrr",
+		Added:     "2026-11-15",
+		Note:      "sent outside this tool",
 	}
 }
 
@@ -59,7 +63,11 @@ func TestHandledElsewhereStopsBeforeNetwork(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "handled.json")
 	entry := handledEntry(zuleatest.Release)
 	writeHandledFile(t, path, []HandledElsewhereEntry{entry})
-	runner := &Runner{Config: cfg, Logger: NewLogger(io.Discard, false), HandledElsewherePath: path}
+	runner := &Runner{
+		Config:               cfg,
+		Logger:               NewLogger(io.Discard, false),
+		HandledElsewherePath: path,
+	}
 
 	outcomes, err := runner.DryRun(context.Background(), []string{zuleatest.Release})
 	if err != nil || len(outcomes) != 1 || outcomes[0].Status != StatusStop || outcomes[0].HandledElsewhere == nil {
@@ -135,7 +143,13 @@ func TestHandledElsewhereHasSeparateQueueState(t *testing.T) {
 	if err := os.MkdirAll(reports, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	scan := ScanSummary{Results: []ScanResult{{Release: zuleatest.Release, Chain: "OK", Title: "Synthetic title", Dupe: "CLEAR", SearchComplete: true}}}
+	scan := ScanSummary{Results: []ScanResult{{
+		Release:       zuleatest.Release,
+		Chain:         "OK",
+		Title:         "Synthetic title",
+		Dupe:          "CLEAR",
+		SearchComplete: true,
+	}}}
 	data, err := json.Marshal(scan)
 	if err != nil {
 		t.Fatal(err)

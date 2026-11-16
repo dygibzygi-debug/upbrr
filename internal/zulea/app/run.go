@@ -369,7 +369,12 @@ func (r *Runner) DryRun(ctx context.Context, releases []string) ([]Outcome, erro
 	if err != nil {
 		outcomes := make([]Outcome, 0, len(releases))
 		for _, rel := range releases {
-			outcome := Outcome{Release: rel, Tracker: input.PTT.Tracker, Status: StatusStop, Reason: err.Error()}
+			outcome := Outcome{
+				Release: rel,
+				Tracker: input.PTT.Tracker,
+				Status:  StatusStop,
+				Reason:  err.Error(),
+			}
 			path, werr := r.writeReport(outcome)
 			if werr != nil {
 				return outcomes, werr
@@ -402,8 +407,11 @@ func (r *Runner) DryRun(ctx context.Context, releases []string) ([]Outcome, erro
 		if entry, ok := handled[rel]; ok {
 			copy := entry
 			outcome = Outcome{
-				Release: rel, Tracker: input.PTT.Tracker, Status: StatusStop,
-				Reason: handledElsewhereReason(entry), HandledElsewhere: &copy,
+				Release:          rel,
+				Tracker:          input.PTT.Tracker,
+				Status:           StatusStop,
+				Reason:           handledElsewhereReason(entry),
+				HandledElsewhere: &copy,
 			}
 		} else {
 			outcome, _ = r.evaluate(ctx, sess, rel)

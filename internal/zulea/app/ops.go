@@ -92,8 +92,12 @@ func (r *Runner) ScanPTT(ctx context.Context, releases []string, delay time.Dura
 		if entry, ok := handled[rel]; ok {
 			copy := entry
 			result := ScanResult{
-				Release: rel, Chain: StatusHandledElsewhere, Dupe: StatusHandledElsewhere,
-				Message: handledElsewhereReason(entry), SearchComplete: true, HandledElsewhere: &copy,
+				Release:          rel,
+				Chain:            StatusHandledElsewhere,
+				Dupe:             StatusHandledElsewhere,
+				Message:          handledElsewhereReason(entry),
+				SearchComplete:   true,
+				HandledElsewhere: &copy,
 			}
 			summary.Counts[StatusHandledElsewhere]++
 			summary.Results = append(summary.Results, result)
@@ -249,7 +253,12 @@ func (r *Runner) Queue() ([]QueueEntry, string, error) {
 	for _, res := range scan.Results {
 		if entry, ok := handled[res.Release]; ok {
 			copy := entry
-			out = append(out, QueueEntry{Release: res.Release, Title: res.Title, State: StatusHandledElsewhere, HandledElsewhere: &copy})
+			out = append(out, QueueEntry{
+				Release:          res.Release,
+				Title:            res.Title,
+				State:            StatusHandledElsewhere,
+				HandledElsewhere: &copy,
+			})
 			seenHandled[res.Release] = true
 			continue
 		}
@@ -266,7 +275,11 @@ func (r *Runner) Queue() ([]QueueEntry, string, error) {
 			return nil, scanPath, fmt.Errorf("queue: %w", err)
 		}
 		if res.Dupe == pttdupe.StatusClear || matched != nil {
-			out = append(out, QueueEntry{Release: res.Release, Title: res.Title, State: StatusReady})
+			out = append(out, QueueEntry{
+				Release: res.Release,
+				Title:   res.Title,
+				State:   StatusReady,
+			})
 		}
 	}
 	var remaining []string
@@ -278,7 +291,11 @@ func (r *Runner) Queue() ([]QueueEntry, string, error) {
 	sort.Strings(remaining)
 	for _, release := range remaining {
 		copy := handled[release]
-		out = append(out, QueueEntry{Release: release, State: StatusHandledElsewhere, HandledElsewhere: &copy})
+		out = append(out, QueueEntry{
+			Release:          release,
+			State:            StatusHandledElsewhere,
+			HandledElsewhere: &copy,
+		})
 	}
 	return out, scanPath, nil
 }

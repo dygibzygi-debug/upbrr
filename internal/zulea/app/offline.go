@@ -90,7 +90,12 @@ func (r *Runner) Check(releases []string) (CheckSummary, error) {
 	for _, rel := range releases {
 		if entry, ok := handled[rel]; ok {
 			copy := entry
-			result := CheckResult{Release: rel, Status: StatusHandledElsewhere, Reason: handledElsewhereReason(entry), HandledElsewhere: &copy}
+			result := CheckResult{
+				Release:          rel,
+				Status:           StatusHandledElsewhere,
+				Reason:           handledElsewhereReason(entry),
+				HandledElsewhere: &copy,
+			}
 			summary.HandledElsewhere++
 			summary.Results = append(summary.Results, result)
 			continue

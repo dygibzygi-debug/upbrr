@@ -142,7 +142,11 @@ func (r *Runner) BuildSummary(ctx context.Context, client seed.Client) (Summary,
 	if attention {
 		lines = append(lines, "Wymaga uwagi — szczegóły w raportach work/reports.")
 	}
-	return Summary{Text: strings.Join(lines, "\n"), Attention: attention, HandledElsewhere: handledEntries}, nil
+	return Summary{
+		Text:             strings.Join(lines, "\n"),
+		Attention:        attention,
+		HandledElsewhere: handledEntries,
+	}, nil
 }
 
 func readJSON(path string, v any) error {
