@@ -201,13 +201,14 @@ func commandNeedsGlobalLock(command string) bool {
 }
 
 func flagValue(args []string, name string) (string, bool) {
-	prefix := "--" + name + "="
 	for i, arg := range args {
-		if after, ok := strings.CutPrefix(arg, prefix); ok {
-			return after, true
-		}
-		if arg == "--"+name && i+1 < len(args) {
-			return args[i+1], true
+		for _, prefix := range []string{"--" + name, "-" + name} {
+			if after, ok := strings.CutPrefix(arg, prefix+"="); ok {
+				return after, true
+			}
+			if arg == prefix && i+1 < len(args) {
+				return args[i+1], true
+			}
 		}
 	}
 	return "", false
