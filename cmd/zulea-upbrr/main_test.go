@@ -6,8 +6,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/autobrr/upbrr/internal/zulea/app"
+	"github.com/autobrr/upbrr/internal/zulea/clilock"
 )
 
 func TestSubmitAliasesAreRefused(t *testing.T) {
@@ -48,7 +56,7 @@ func TestDupeAcceptRequiresTerminal(t *testing.T) {
 
 func TestVersion(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if code := run(context.Background(), []string{"version"}, &out, &errOut); code != exitOK || !strings.Contains(out.String(), "0.7.0") {
+	if code := run(context.Background(), []string{"version"}, &out, &errOut); code != exitOK || !strings.Contains(out.String(), "0.7.1") {
 		t.Fatalf("exit %d out %q err %q", code, out.String(), errOut.String())
 	}
 }
@@ -102,4 +110,171 @@ func TestOfflineCommandsRequireConfig(t *testing.T) {
 			t.Fatalf("%s: exit %d", cmd, code)
 		}
 	}
+}
+
+func TestGlobalLockCommandSet(t *testing.T) {
+	locked := []string{"plan", "dry-run", "upload", "dupe-accept", "resolve", "seed", "ptt-status", "scan-ptt", "check", "summary", "history"}
+	for _, command := range locked {
+		if !commandNeedsGlobalLock(command) {
+			t.Errorf("%s must use the global lock", command)
+		}
+	}
+	for _, command := range []string{"version", "receipts", "queue", "seed-status"} {
+		if commandNeedsGlobalLock(command) {
+			t.Errorf("%s must stay readable while the lock is held", command)
+		}
+	}
+}
+
+func TestFlagValueAcceptsGoFlagSpellings(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "double separate",
+			args: []string{"--config", "double.json"},
+			want: "double.json",
+		},
+		{
+			name: "double equals",
+			args: []string{"--config=double-equals.json"},
+			want: "double-equals.json",
+		},
+		{
+			name: "single separate",
+			args: []string{"-config", "single.json"},
+			want: "single.json",
+		},
+		{
+			name: "single equals",
+			args: []string{"-config=single-equals.json"},
+			want: "single-equals.json",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := flagValue(tc.args, "config")
+			if !ok || got != tc.want {
+				t.Fatalf("flagValue(%q) = %q, %v", tc.args, got, ok)
+			}
+		})
+	}
+}
+
+func TestBusyLockReturns75AndStableJSON(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("LoadConfig requires POSIX 0600; the production and lock contract are Linux-only")
+	}
+	work := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "zulea.json")
+	cfg := app.Config{
+		LibraryRoot:   filepath.Join(t.TempDir(), "library"),
+		FreezePath:    filepath.Join(t.TempDir(), "freeze.tsv"),
+		FreezeSHA256:  strings.Repeat("0", 64),
+		TitlesPath:    filepath.Join(t.TempDir(), "titles.tsv"),
+		ManifestPath:  filepath.Join(t.TempDir(), "manifest.tsv"),
+		TMOutputDir:   filepath.Join(t.TempDir(), "torrents"),
+		WorkDir:       work,
+		PhysicalDisk:  "disk1",
+		DiskCheckMode: "path",
+		MediaInfo: app.MediaInfoConfig{
+			Source: app.MediaInfoCLI,
+			Binary: "mediainfo",
+		},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := clilock.Acquire(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"summary", "--config", configPath, "--json"}, &out, &errOut)
+	if code != exitBusy || errOut.Len() != 0 {
+		t.Fatalf("code=%d stderr=%q", code, errOut.String())
+	}
+	var doc app.JSONDocument
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.SchemaVersion != 1 || doc.Command != "summary" || doc.OK || doc.ExitCode != exitBusy || doc.Error != "busy" {
+		t.Fatalf("busy JSON: %+v", doc)
+	}
+}
+
+func TestBusyLockWithSingleDashConfigReturns75(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("LoadConfig requires POSIX 0600; the production and lock contract are Linux-only")
+	}
+	work := t.TempDir()
+	configPath := writeLockTestConfig(t, work)
+	lock, err := clilock.Acquire(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"summary", "-config", configPath, "--json"}, &out, &errOut)
+	if code != exitBusy || errOut.Len() != 0 {
+		t.Fatalf("code=%d stderr=%q", code, errOut.String())
+	}
+}
+
+func TestInvalidConfigStopsBeforeCommandWork(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("LoadConfig requires POSIX 0600; the production contract is Linux-only")
+	}
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "broken.json")
+	if err := os.WriteFile(configPath, []byte("{not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := run(context.Background(), []string{"summary", "-config", configPath, "--json"}, &out, &errOut)
+	if code == exitOK || code == exitBusy {
+		t.Fatalf("invalid config returned code %d", code)
+	}
+	if out.Len() != 0 || !strings.Contains(errOut.String(), "config: parse") {
+		t.Fatalf("stdout=%q stderr=%q", out.String(), errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "nightly", "state.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("command work happened before config rejection: %v", err)
+	}
+}
+
+func writeLockTestConfig(t *testing.T, work string) string {
+	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "zulea.json")
+	cfg := app.Config{
+		LibraryRoot:   filepath.Join(t.TempDir(), "library"),
+		FreezePath:    filepath.Join(t.TempDir(), "freeze.tsv"),
+		FreezeSHA256:  strings.Repeat("0", 64),
+		TitlesPath:    filepath.Join(t.TempDir(), "titles.tsv"),
+		ManifestPath:  filepath.Join(t.TempDir(), "manifest.tsv"),
+		TMOutputDir:   filepath.Join(t.TempDir(), "torrents"),
+		WorkDir:       work,
+		PhysicalDisk:  "disk1",
+		DiskCheckMode: "path",
+		MediaInfo: app.MediaInfoConfig{
+			Source: app.MediaInfoCLI,
+			Binary: "mediainfo",
+		},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return configPath
 }

@@ -223,7 +223,7 @@ zulea-upbrr ptt-taxonomy --options pasted.html [--apply zulea.json]   # PTT form
 zulea-upbrr ptt-status --config F [--release REL]     # moderation state of accepted uploads (read only)
 zulea-upbrr seed-status --config F                     # qBittorrent state of accepted uploads (read only)
 zulea-upbrr history --config F [--out file.csv]        # receipts as CSV (no network)
-zulea-upbrr summary --config F [--with-seed] [--notify]   # short status; optional Discord/Telegram
+zulea-upbrr summary --config F [--with-seed] [--notify] [--update-nightly-state]   # nightly state changes only with the explicit flag
 zulea-upbrr resolve --config F --release REL --state not_sent|accepted|rejected [--ptt-id ID] --note TEXT
 zulea-upbrr dupe-accept --config F --release REL --reason TEXT [--revoke]
 ```
@@ -285,6 +285,11 @@ not written to the log.
 
 ## Operations after the canary
 
+Stateful and networked commands share a non-blocking process lock at
+`work_dir/.zulea-upbrr.lock`. A concurrent invocation exits with code 75
+(`busy`) without waiting or retrying. Pure reads (`version`, `receipts`,
+`queue`, `seed-status`) remain available while the lock is held.
+
 - **Moderation.** `ptt-status` asks PTT whether each accepted upload is
   visible. The standard Unit3D API only lists approved torrents, so the
   states are `APPROVED`, `PENDING` (only when the site offers
@@ -296,7 +301,9 @@ not written to the log.
 - **Seeding.** `seed` uploads the registered PTT torrent through the WebAPI
   (it is not copied outside `work_dir`). The torrent is added stopped, with
   `autoTMM=false`, the configured `save_path` and no completion action. A
-  recheck runs, and `--start` starts it only at 100%. If qBittorrent already
+  receipt must first contain `moderation: APPROVED`; otherwise the command
+  refuses before contacting qBittorrent. A recheck runs, and `--start` starts
+  it only at 100%. If qBittorrent already
   has that torrent, matched by the **PTT** infohash (not the TM infohash on
   the receipt), nothing is added or edited and the receipt records
   `seed_source: manual`. `seed-status` only reads qBittorrent: `SEEDING`,
@@ -316,7 +323,10 @@ not written to the log.
   ptt-status, seed-status, history and summary. `nightly.scan_ptt` is off
   unless the operator sets it. The scan waits at least 3s and stops on the
   first API error. The notification level is a warning only when something
-  changed since the previous run (see `work_dir/nightly/state.json`). Standing
+  changed since the previous run (see `work_dir/nightly/state.json`). Only the
+  nightly script calls `summary --update-nightly-state`; daytime panel and
+  terminal summaries cannot advance that baseline. Exit 75 is reported as
+  "pominięto — zajęte" without raising a warning. Standing
   STOPs are listed without a warning. It never uploads, seeds or accepts
   duplicates.
 

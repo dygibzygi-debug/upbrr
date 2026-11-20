@@ -26,9 +26,23 @@ type Summary struct {
 	HandledElsewhere []HandledElsewhereEntry `json:"handled_elsewhere,omitempty"`
 }
 
+// SummaryOptions controls the only stateful part of summary generation.
+type SummaryOptions struct {
+	// UpdateNightlyState advances work/nightly/state.json. Interactive and panel
+	// reads leave it false so they cannot consume changes meant for nightly.sh.
+	UpdateNightlyState bool
+}
+
 // BuildSummary condenses the latest check and scan reports, receipts,
-// moderation and (when client is non-nil) seeding state.
+// moderation and (when client is non-nil) seeding state without changing the
+// nightly baseline.
 func (r *Runner) BuildSummary(ctx context.Context, client seed.Client) (Summary, error) {
+	return r.BuildSummaryWithOptions(ctx, client, SummaryOptions{})
+}
+
+// BuildSummaryWithOptions is BuildSummary with an explicit nightly-state
+// update used only by the nightly script.
+func (r *Runner) BuildSummaryWithOptions(ctx context.Context, client seed.Client, opts SummaryOptions) (Summary, error) {
 	handledMap, err := r.loadHandledElsewhere()
 	if err != nil {
 		return Summary{}, err
@@ -136,8 +150,10 @@ func (r *Runner) BuildSummary(ctx context.Context, client seed.Client) (Summary,
 			}
 		}
 	}
-	if err := r.writeNightlyState(prev); err != nil {
-		return Summary{}, err
+	if opts.UpdateNightlyState {
+		if err := r.writeNightlyState(prev); err != nil {
+			return Summary{}, err
+		}
 	}
 	if attention {
 		lines = append(lines, "Wymaga uwagi — szczegóły w raportach work/reports.")

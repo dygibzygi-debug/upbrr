@@ -20,6 +20,10 @@ import (
 func TestNightlyWarnsOnlyWhenOKSetChanges(t *testing.T) {
 	work := t.TempDir()
 	runner := &Runner{Config: Config{WorkDir: work}}
+	buildNightly := func(r *Runner, client seed.Client) (Summary, error) {
+		t.Helper()
+		return r.BuildSummaryWithOptions(context.Background(), client, SummaryOptions{UpdateNightlyState: true})
+	}
 	writeCheck := func(name string, results []CheckResult) {
 		t.Helper()
 		ok, stop := 0, 0
@@ -44,11 +48,11 @@ func TestNightlyWarnsOnlyWhenOKSetChanges(t *testing.T) {
 		},
 		{Release: "Ready-GRP", Status: "OK"},
 	})
-	first, err := runner.BuildSummary(context.Background(), nil)
+	first, err := buildNightly(runner, nil)
 	if err != nil || first.Attention || !strings.Contains(first.Text, "STOP zastane") {
 		t.Fatalf("baseline must not warn about standing STOPs: %+v %v", first, err)
 	}
-	second, err := runner.BuildSummary(context.Background(), nil)
+	second, err := buildNightly(runner, nil)
 	if err != nil || second.Attention || !strings.Contains(second.Text, "STOP bez zmian") {
 		t.Fatalf("unchanged STOPs must stay quiet: %+v %v", second, err)
 	}
@@ -62,7 +66,7 @@ func TestNightlyWarnsOnlyWhenOKSetChanges(t *testing.T) {
 		OK:   1,
 		Stop: 1,
 	})
-	if base, err := goneRunner.BuildSummary(context.Background(), nil); err != nil || base.Attention {
+	if base, err := buildNightly(goneRunner, nil); err != nil || base.Attention {
 		t.Fatalf("baseline %+v %v", base, err)
 	}
 	writeCheckFile(t, goneRunner.Config.WorkDir, "check-20060102-000000.json", CheckSummary{
@@ -73,7 +77,7 @@ func TestNightlyWarnsOnlyWhenOKSetChanges(t *testing.T) {
 		}},
 		Stop: 1,
 	})
-	fourth, err := goneRunner.BuildSummary(context.Background(), nil)
+	fourth, err := buildNightly(goneRunner, nil)
 	if err != nil || !fourth.Attention || !strings.Contains(fourth.Text, "Zniknęło z OK: Ready-GRP") {
 		t.Fatalf("a release leaving OK must warn: %+v %v", fourth, err)
 	}
@@ -89,7 +93,7 @@ func TestNightlyWarnsOnlyWhenOKSetChanges(t *testing.T) {
 			Reason:  "tm",
 		},
 	})
-	third, err := runner.BuildSummary(context.Background(), nil)
+	third, err := buildNightly(runner, nil)
 	if err != nil || !third.Attention || !strings.Contains(third.Text, "Nowy STOP (wcześniej OK): Ready-GRP") {
 		t.Fatalf("a new STOP must warn: %+v %v", third, err)
 	}
@@ -162,6 +166,28 @@ func TestNightlyHandledElsewhereDoesNotRaiseAttention(t *testing.T) {
 	lines, attention, next := nightlyChainDelta(prev, true, []CheckResult{{Release: "Handled-GRP", Status: StatusHandledElsewhere}})
 	if attention || len(lines) != 0 || len(next) != 1 || next[0] != "Handled-GRP" {
 		t.Fatalf("handled elsewhere must stay quiet: lines=%v attention=%t next=%v", lines, attention, next)
+	}
+}
+
+func TestSummaryUpdatesNightlyStateOnlyWhenExplicit(t *testing.T) {
+	work := t.TempDir()
+	runner := &Runner{Config: Config{WorkDir: work}}
+	writeCheckFile(t, work, "check-20060101-000000.json", CheckSummary{
+		Results: []CheckResult{{Release: "Ready-GRP", Status: "OK"}},
+		OK:      1,
+	})
+	if _, err := runner.BuildSummary(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(runner.nightlyStatePath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("plain summary changed nightly state: %v", err)
+	}
+	if _, err := runner.BuildSummaryWithOptions(context.Background(), nil, SummaryOptions{UpdateNightlyState: true}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(runner.nightlyStatePath())
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("explicit nightly state update: %v mode=%v", err, info)
 	}
 }
 

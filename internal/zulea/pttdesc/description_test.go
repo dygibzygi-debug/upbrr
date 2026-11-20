@@ -65,3 +65,27 @@ func TestStripEmptyFilmwebRatingAtTextStart(t *testing.T) {
 		t.Fatalf("first line changed=%t got=%q want=%q", changed, got, want)
 	}
 }
+
+func TestStripEmptyFilmwebRatingRemovesConsecutiveLines(t *testing.T) {
+	const line = "Filmweb .... : ___/10   (wpisz recznie)\n"
+	tests := map[string]string{
+		"at text start": line + line + "IMDb ....... : 6.4/10\n",
+		"inside block":  "[pre]\n" + line + line + "IMDb ....... : 6.4/10\n[/pre]\n",
+	}
+	wants := map[string]string{
+		"at text start": "IMDb ....... : 6.4/10\n",
+		"inside block":  "[pre]\nIMDb ....... : 6.4/10\n[/pre]\n",
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, changed := StripEmptyFilmwebRating(input)
+			if !changed || got != wants[name] {
+				t.Fatalf("changed=%t got=%q want=%q", changed, got, wants[name])
+			}
+			again, changedAgain := StripEmptyFilmwebRating(got)
+			if changedAgain || again != got {
+				t.Fatalf("not idempotent: changed=%t got=%q", changedAgain, again)
+			}
+		})
+	}
+}

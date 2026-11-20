@@ -193,10 +193,12 @@ type recordingQB struct {
 	lookups  []string
 	failAdd  bool
 	rechecks int
+	calls    int
 }
 
-func (q *recordingQB) Login(context.Context) error { return nil }
+func (q *recordingQB) Login(context.Context) error { q.calls++; return nil }
 func (q *recordingQB) Find(_ context.Context, hash string) (*seed.Torrent, error) {
+	q.calls++
 	q.lookups = append(q.lookups, hash)
 	if q.byHash != nil {
 		return q.byHash[hash], nil
@@ -204,6 +206,7 @@ func (q *recordingQB) Find(_ context.Context, hash string) (*seed.Torrent, error
 	return q.present, nil
 }
 func (q *recordingQB) Add(_ context.Context, path string, opts map[string]string) error {
+	q.calls++
 	q.added, q.options = path, opts
 	if q.failAdd {
 		return errors.New("add refused in test")
@@ -215,8 +218,54 @@ func (q *recordingQB) Add(_ context.Context, path string, opts map[string]string
 	}
 	return nil
 }
-func (q *recordingQB) Recheck(context.Context, string) error { q.rechecks++; return nil }
-func (q *recordingQB) Start(context.Context, string) error   { q.started = true; return nil }
+func (q *recordingQB) Recheck(context.Context, string) error { q.calls++; q.rechecks++; return nil }
+func (q *recordingQB) Start(context.Context, string) error   { q.calls++; q.started = true; return nil }
+
+func setReceiptModeration(t *testing.T, runner *Runner, moderation string) {
+	t.Helper()
+	receipt, err := runner.readReceipt(zuleatest.Release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt.Moderation = moderation
+	if err := writeReceipt(runner.receiptPath(zuleatest.Release), receipt, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSeedRequiresApprovedBeforeQBit(t *testing.T) {
+	_, _, runner := uploadSetup(t)
+	fp := dryRunFingerprint(t, runner)
+	if _, err := runner.Upload(context.Background(), UploadRequest{
+		Release:     zuleatest.Release,
+		Fingerprint: fp,
+		Preview:     io.Discard,
+		Confirm:     typed(ConfirmationPhrase(fp)),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, moderation := range []string{"", "PENDING", "REJECTED"} {
+		t.Run("moderation_"+moderation, func(t *testing.T) {
+			setReceiptModeration(t, runner, moderation)
+			qb := &recordingQB{}
+			_, err := runner.Seed(context.Background(), SeedRequest{
+				Release: zuleatest.Release,
+				Wait:    time.Minute,
+				Start:   true,
+			}, qb)
+			if err == nil || !strings.Contains(err.Error(), "seed dopiero po APPROVED") {
+				t.Fatalf("moderation %q error=%v", moderation, err)
+			}
+			if qb.calls != 0 {
+				t.Fatalf("moderation %q contacted qBittorrent %d times", moderation, qb.calls)
+			}
+		})
+	}
+	setReceiptModeration(t, runner, "PENDING")
+	if _, err := runner.StartSeedVerified(context.Background(), zuleatest.Release); err == nil || !strings.Contains(err.Error(), "seed dopiero po APPROVED") {
+		t.Fatalf("start-verified must refuse before qBittorrent: %v", err)
+	}
+}
 
 func TestSeedAfterAcceptedUpload(t *testing.T) {
 	_, _, runner := uploadSetup(t)
@@ -239,6 +288,7 @@ func TestSeedAfterAcceptedUpload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	setReceiptModeration(t, runner, "APPROVED")
 	res, err := runner.Seed(context.Background(), SeedRequest{
 		Release: zuleatest.Release,
 		Wait:    1e9,
@@ -288,6 +338,7 @@ func TestSeedMatchesPTTInfoHashNotTM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	setReceiptModeration(t, runner, "APPROVED")
 	pttHash := result.Comparison.Downloaded.InfoHash
 	tmHash := result.Receipt.InfoHash
 	if pttHash == "" || pttHash == tmHash || !result.Comparison.InfoHashChanged {
