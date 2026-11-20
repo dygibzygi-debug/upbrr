@@ -78,6 +78,7 @@ func TestSeedUsesPTTHashAndHidesThePassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	setReceiptModeration(t, runner, "APPROVED")
 	pttHash := uploaded.Comparison.Downloaded.InfoHash
 	var mu sync.Mutex
 	sawPassword, mutated := false, false

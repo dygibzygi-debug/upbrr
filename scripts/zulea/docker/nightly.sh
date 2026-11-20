@@ -40,6 +40,7 @@ record() { # name, command...
   local rc=$?
   case $rc in
     0|3) ;;
+    75) echo "$name: pominięto — zajęte" ;;
     *) problems+=("$name: błąd (kod $rc)") ;;
   esac
   return 0
@@ -61,7 +62,7 @@ if [ "$SEED_CHECK" = yes ]; then
 fi
 record "history" "$ZULEA" --network-none history --config "$CONFIG"
 
-summary_args=(summary --config "$CONFIG")
+summary_args=(summary --config "$CONFIG" --update-nightly-state)
 [ "$SEED_CHECK" = yes ] && summary_args+=(--with-seed)
 [ "$EXTERNAL_NOTIFY" = yes ] && summary_args+=(--notify)
 # summary --with-seed reads qBittorrent, so it keeps the default network.
@@ -69,9 +70,12 @@ summary=$("$ZULEA" "${summary_args[@]}")
 rc=$?
 
 level=normal
+if [ "$rc" -eq 75 ]; then
+  summary="summary: pominięto — zajęte"
+fi
 if [ "$rc" -eq 3 ] || [ ${#problems[@]} -gt 0 ]; then
   level=warning
-elif [ "$rc" -ne 0 ]; then
+elif [ "$rc" -ne 0 ] && [ "$rc" -ne 75 ]; then
   level=warning
   problems+=("summary: błąd (kod $rc)")
 fi

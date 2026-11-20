@@ -13,14 +13,16 @@ const emptyFilmwebRatingLine = "Filmweb .... : ___/10   (wpisz recznie)\n"
 // the input adapter and must run before this transform.
 func StripEmptyFilmwebRating(text string) (string, bool) {
 	changed := false
-	if strings.HasPrefix(text, emptyFilmwebRatingLine) {
-		text = strings.TrimPrefix(text, emptyFilmwebRatingLine)
-		changed = true
-	}
 	anchored := "\n" + emptyFilmwebRatingLine
-	if strings.Contains(text, anchored) {
+	for {
+		before := text
+		if after, ok := strings.CutPrefix(text, emptyFilmwebRatingLine); ok {
+			text = after
+		}
 		text = strings.ReplaceAll(text, anchored, "\n")
+		if text == before {
+			return text, changed
+		}
 		changed = true
 	}
-	return text, changed
 }

@@ -431,13 +431,13 @@ func (r *Runner) Seed(ctx context.Context, req SeedRequest, client seed.Client) 
 	if err := r.refuseHandledElsewhere(req.Release); err != nil {
 		return seed.Result{}, fmt.Errorf("seed: %w", err)
 	}
+	receipt, err := r.approvedSeedReceipt(req.Release)
+	if err != nil {
+		return seed.Result{}, err
+	}
 	q := r.Config.QBittorrent
 	if q == nil {
 		return seed.Result{}, errors.New("seed: qbittorrent is not configured")
-	}
-	receipt, err := r.readReceipt(req.Release)
-	if err != nil {
-		return seed.Result{}, err
 	}
 	if receipt.State != ReceiptAccepted || receipt.DataMatch == nil || !*receipt.DataMatch || receipt.RegisteredTorrent == "" {
 		return seed.Result{}, fmt.Errorf("seed: receipt must be accepted with DANE_ZGODNE=TAK (state %s)", receipt.State)
@@ -508,6 +508,17 @@ func (r *Runner) readReceipt(release string) (Receipt, error) {
 	return receipt, nil
 }
 
+func (r *Runner) approvedSeedReceipt(release string) (Receipt, error) {
+	receipt, err := r.readReceipt(release)
+	if err != nil {
+		return Receipt{}, err
+	}
+	if receipt.Moderation != "APPROVED" {
+		return Receipt{}, fmt.Errorf("seed: moderation=%q; uruchom ptt-status; seed dopiero po APPROVED", receipt.Moderation)
+	}
+	return receipt, nil
+}
+
 func (r *Runner) writeText(sub, name, text string) error {
 	dir := filepath.Join(r.Config.WorkDir, sub)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -531,13 +542,13 @@ func (r *Runner) StartSeedVerifiedFile(ctx context.Context, release, confirmatio
 	if err := r.refuseHandledElsewhere(release); err != nil {
 		return seed.Result{}, fmt.Errorf("seed: %w", err)
 	}
+	receipt, err := r.approvedSeedReceipt(release)
+	if err != nil {
+		return seed.Result{}, err
+	}
 	q := r.Config.QBittorrent
 	if q == nil {
 		return seed.Result{}, errors.New("seed: qbittorrent is not configured")
-	}
-	receipt, err := r.readReceipt(release)
-	if err != nil {
-		return seed.Result{}, err
 	}
 	data, err := tm.ReadFile(receipt.RegisteredTorrent)
 	if err != nil {

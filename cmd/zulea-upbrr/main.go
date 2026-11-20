@@ -24,6 +24,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/autobrr/upbrr/internal/zulea/app"
+	"github.com/autobrr/upbrr/internal/zulea/clilock"
 	"github.com/autobrr/upbrr/internal/zulea/dupeaccept"
 	"github.com/autobrr/upbrr/internal/zulea/names"
 	"github.com/autobrr/upbrr/internal/zulea/ptttax"
@@ -39,6 +40,7 @@ const (
 	exitRuntime = 1
 	exitUsage   = 2
 	exitStop    = 3
+	exitBusy    = 75
 )
 
 func main() {
@@ -67,7 +69,8 @@ Użycie:
   zulea-upbrr ptt-status --config FILE [--release REL ...]            (moderacja wysłanych; tylko odczyt)
   zulea-upbrr seed-status --config FILE                               (stan seedu w qBittorrencie; tylko odczyt)
   zulea-upbrr history --config FILE [--out FILE.csv]                  (historia wysyłek CSV)
-  zulea-upbrr summary --config FILE [--with-seed] [--notify]          (krótkie podsumowanie; opcjonalnie Discord/Telegram)
+  zulea-upbrr summary --config FILE [--with-seed] [--notify] [--update-nightly-state]
+                                                                      (krótkie podsumowanie; stan nocny tylko z jawną flagą)
   zulea-upbrr resolve --config FILE --release REL --state not_sent|accepted|rejected [--ptt-id ID] --note TEKST
                                                                       (decyzja po ręcznym sprawdzeniu PTT; terminal, fraza)
   zulea-upbrr dupe-accept --config FILE --release REL --reason TEKST [--revoke]
@@ -78,7 +81,7 @@ Użycie:
   zulea-upbrr upload --config FILE --release REL --fingerprint FP   (canary: jedno wydanie, terminal, wpisanie potwierdzenia)
   zulea-upbrr version
 
-Kody wyjścia: 0 wszystko READY, 3 co najmniej jeden STOP, 2 błąd użycia/konfiguracji, 1 błąd wykonania.
+Kody wyjścia: 0 wszystko READY, 3 co najmniej jeden STOP, 75 zajęta blokada CLI, 2 błąd użycia/konfiguracji, 1 błąd wykonania.
 Upload, dupe-accept, resolve i seed --start-verified wymagają terminala albo --confirmation-file.
 --json daje stabilny dokument schema_version bez sekretów. Nie ma --force. Nic nie omija bramek.
 dupe-accept czyta ostatni raport scan-ptt albo plan, nie łączy się z trackerem.
@@ -96,6 +99,39 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		usage(stderr)
 		return exitUsage
 	}
+	command := args[0]
+	if commandNeedsGlobalLock(command) {
+		configPath, found := flagValue(args[1:], "config")
+		if found {
+			cfg, err := app.LoadConfig(configPath)
+			if err == nil {
+				lock, lockErr := clilock.Acquire(cfg.WorkDir)
+				if lockErr != nil {
+					jsonCommand := command
+					if jsonCommand == "dry-run" {
+						jsonCommand = "plan"
+					}
+					if errors.Is(lockErr, clilock.ErrBusy) {
+						if hasFlag(args[1:], "json") {
+							return writeCommandJSON(stdout, stderr, jsonCommand, exitBusy, nil, clilock.ErrBusy, nil)
+						}
+						fmt.Fprintf(stderr, "zulea-upbrr %s: pominięto — inne polecenie zulea-upbrr jest w toku\n", jsonCommand)
+						return exitBusy
+					}
+					if hasFlag(args[1:], "json") {
+						return writeCommandJSON(stdout, stderr, jsonCommand, exitRuntime, nil, lockErr, nil)
+					}
+					fmt.Fprintf(stderr, "zulea-upbrr %s: %v\n", jsonCommand, lockErr)
+					return exitRuntime
+				}
+				defer func() { _ = lock.Close() }()
+			}
+		}
+	}
+	return dispatch(ctx, args, stdout, stderr)
+}
+
+func dispatch(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "plan", "dry-run":
 		return runPlan(ctx, args[1:], stdout, stderr)
@@ -153,6 +189,37 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		usage(stderr)
 		return exitUsage
 	}
+}
+
+func commandNeedsGlobalLock(command string) bool {
+	switch command {
+	case "plan", "dry-run", "upload", "dupe-accept", "resolve", "seed", "ptt-status", "scan-ptt", "check", "summary", "history":
+		return true
+	default:
+		return false
+	}
+}
+
+func flagValue(args []string, name string) (string, bool) {
+	prefix := "--" + name + "="
+	for i, arg := range args {
+		if after, ok := strings.CutPrefix(arg, prefix); ok {
+			return after, true
+		}
+		if arg == "--"+name && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
+}
+
+func hasFlag(args []string, name string) bool {
+	for _, arg := range args {
+		if arg == "--"+name || strings.HasPrefix(arg, "--"+name+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 func runPlan(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -1025,11 +1092,12 @@ func runHistory(args []string, stdout, stderr io.Writer) int {
 }
 
 func runSummary(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	var withSeed, send, asJSON bool
+	var withSeed, send, asJSON, updateNightlyState bool
 	cfg, ok := loadConfigFlag("summary", args, stderr, func(fs *flag.FlagSet) {
 		fs.BoolVar(&withSeed, "with-seed", false, "sprawdź też stan seedu w qBittorrencie")
 		fs.BoolVar(&send, "notify", false, "wyślij do skonfigurowanych kanałów (Discord/Telegram)")
 		fs.BoolVar(&asJSON, "json", false, "stabilny JSON (schema_version) zamiast tekstu")
+		fs.BoolVar(&updateNightlyState, "update-nightly-state", false, "zapisz punkt odniesienia raportu nocnego")
 	})
 	if !ok {
 		return exitUsage
@@ -1045,7 +1113,7 @@ func runSummary(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		}
 		client = c
 	}
-	summary, err := runner.BuildSummary(ctx, client)
+	summary, err := runner.BuildSummaryWithOptions(ctx, client, app.SummaryOptions{UpdateNightlyState: updateNightlyState})
 	code := exitOK
 	if err != nil {
 		code = exitRuntime
