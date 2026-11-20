@@ -27,7 +27,7 @@ func validateOwner(info os.FileInfo) error {
 	if !ok {
 		return errors.New("lock owner is unavailable")
 	}
-	if stat.Uid != uint32(os.Geteuid()) {
+	if int64(stat.Uid) != int64(os.Geteuid()) {
 		return fmt.Errorf("lock file owner is uid %d, expected %d", stat.Uid, os.Geteuid())
 	}
 	return nil
