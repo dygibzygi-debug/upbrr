@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/autobrr/upbrr/internal/pathing"
 	"github.com/autobrr/upbrr/internal/zulea/freeze"
@@ -123,9 +124,21 @@ type PTTConfig struct {
 	Anonymous  bool   `json:"anonymous"`
 	// PersonalRelease must be decided explicitly (D-5); null blocks canary readiness.
 	PersonalRelease *bool `json:"personal_release"`
-	// ModQueue opts into the moderation queue; required true for the canary (D-5).
-	ModQueue bool              `json:"mod_queue"`
-	Taxonomy *pttplan.Taxonomy `json:"taxonomy,omitempty"`
+	// ModQueue opts into the moderation queue; otherwise D-5 requires a
+	// completed canary decision backed by enough APPROVED receipts.
+	ModQueue       bool                  `json:"mod_queue"`
+	CanaryComplete *CanaryCompleteConfig `json:"canary_complete,omitempty"`
+	Taxonomy       *pttplan.Taxonomy     `json:"taxonomy,omitempty"`
+}
+
+// CanaryCompleteConfig records the owner's explicit decision that the live
+// canary stage is complete. It never bypasses the minimum APPROVED-receipt
+// evidence or any other upload gate.
+type CanaryCompleteConfig struct {
+	Confirmed   bool   `json:"confirmed"`
+	DecidedBy   string `json:"decided_by"`
+	Date        string `json:"date"`
+	MinApproved int    `json:"min_approved"`
 }
 
 // LoadConfig reads a JSON config file that must be private (0600 or stricter)
@@ -192,6 +205,17 @@ func (c Config) Validate() error {
 	}
 	if c.PTTEnabled() && strings.TrimSpace(c.TMDBKeyFile) == "" {
 		return errors.New("config: tmdb_key_file is required for PTT (decision D-2)")
+	}
+	if decision := c.PTT.CanaryComplete; decision != nil {
+		if strings.TrimSpace(decision.DecidedBy) == "" {
+			return errors.New("config: ptt.canary_complete.decided_by is required")
+		}
+		if _, err := time.Parse("2006-01-02", decision.Date); err != nil {
+			return errors.New("config: ptt.canary_complete.date must be YYYY-MM-DD")
+		}
+		if decision.MinApproved < 3 {
+			return errors.New("config: ptt.canary_complete.min_approved must be at least 3")
+		}
 	}
 	if err := c.DiskCheck().Validate(); err != nil {
 		return fmt.Errorf("config: physical_disk/disk_check_mode: %w", err)
