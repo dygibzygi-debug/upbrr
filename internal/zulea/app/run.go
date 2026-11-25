@@ -18,6 +18,7 @@ import (
 	"github.com/autobrr/upbrr/internal/redaction"
 	"github.com/autobrr/upbrr/internal/zulea/input"
 	"github.com/autobrr/upbrr/internal/zulea/pttdupe"
+	"github.com/autobrr/upbrr/internal/zulea/pttfetch"
 	"github.com/autobrr/upbrr/internal/zulea/pttplan"
 	"github.com/autobrr/upbrr/internal/zulea/tmdb"
 	"github.com/autobrr/upbrr/pkg/api"
@@ -46,8 +47,9 @@ type Outcome struct {
 // CanaryGate reports readiness for a first, human-confirmed upload (stage 3).
 // It never authorizes an upload by itself.
 type CanaryGate struct {
-	Ready    bool     `json:"ready"`
-	Blockers []string `json:"blockers"`
+	Ready    bool                `json:"ready"`
+	Blockers []string            `json:"blockers"`
+	Basis    pttplan.CanaryBasis `json:"basis"`
 }
 
 // Statuses.
@@ -183,6 +185,22 @@ func (r *Runner) mediaInfoSource(logger *Logger) pttplan.MediaInfoSource {
 
 // canaryGate lists every unmet stage-3 precondition from the review (W-1, D-5, D-6).
 func (r *Runner) canaryGate(release string, plan *pttplan.Plan, dupeResult *pttdupe.Result, apiKey string) CanaryGate {
+	basis, basisErr := r.CanaryBasis()
+	if plan != nil && plan.CanaryBasis.Basis != "" {
+		basis = plan.CanaryBasis
+		basisErr = nil
+	}
+	return r.canaryGateWithBasis(release, plan, dupeResult, apiKey, basis, basisErr)
+}
+
+func (r *Runner) canaryGateWithBasis(
+	release string,
+	plan *pttplan.Plan,
+	dupeResult *pttdupe.Result,
+	apiKey string,
+	basis pttplan.CanaryBasis,
+	basisErr error,
+) CanaryGate {
 	var blockers []string
 	if plan == nil {
 		blockers = append(blockers, "plan zatrzymany (STOP)")
@@ -207,8 +225,20 @@ func (r *Runner) canaryGate(release string, plan *pttplan.Plan, dupeResult *pttd
 	if r.Config.PTT.PersonalRelease == nil {
 		blockers = append(blockers, "D-5: ptt.personal_release nierozstrzygnięte")
 	}
-	if !r.Config.PTT.ModQueue {
-		blockers = append(blockers, "D-5: canary wymaga ptt.mod_queue=true")
+	if basisErr != nil {
+		blockers = append(blockers, "D-5: nie można odczytać podstawy canary: "+basisErr.Error())
+	} else if !r.Config.PTT.ModQueue {
+		decision := r.Config.PTT.CanaryComplete
+		switch {
+		case decision == nil || !decision.Confirmed:
+			blockers = append(blockers, "D-5: wymagane ptt.mod_queue=true albo jawne ptt.canary_complete.confirmed=true")
+		case basis.ApprovedCount < basis.MinApproved:
+			blockers = append(blockers, fmt.Sprintf(
+				"D-5: canary_complete wymaga co najmniej %d APPROVED (jest %d)",
+				basis.MinApproved,
+				basis.ApprovedCount,
+			))
+		}
 	}
 	if r.MediaInfo == nil && r.Config.MediaInfo.Source == MediaInfoUpbrr {
 		blockers = append(blockers, "D-6: canary wymaga MediaInfo z CLI (mediainfo.source=cli lub file)")
@@ -216,7 +246,40 @@ func (r *Runner) canaryGate(release string, plan *pttplan.Plan, dupeResult *pttd
 	if blockers == nil {
 		blockers = []string{}
 	}
-	return CanaryGate{Ready: len(blockers) == 0, Blockers: blockers}
+	return CanaryGate{
+		Ready:    len(blockers) == 0,
+		Blockers: blockers,
+		Basis:    basis,
+	}
+}
+
+// CanaryBasis returns auditable D-5 evidence from configuration and receipts.
+// Unreadable receipts fail closed because the approved count cannot be proven.
+func (r *Runner) CanaryBasis() (pttplan.CanaryBasis, error) {
+	if r.Config.PTT.ModQueue {
+		return pttplan.CanaryBasis{Basis: "mod_queue"}, nil
+	}
+	receipts, err := r.Receipts()
+	if err != nil {
+		return pttplan.CanaryBasis{}, err
+	}
+	approved := 0
+	for _, receipt := range receipts {
+		if receipt.State == ReceiptUnreadable {
+			return pttplan.CanaryBasis{}, fmt.Errorf("receipt for %s is unreadable", receipt.Release)
+		}
+		if receipt.State == ReceiptAccepted && receipt.Moderation == pttfetch.StateApproved {
+			approved++
+		}
+	}
+	basis := pttplan.CanaryBasis{Basis: "canary_complete", ApprovedCount: approved}
+	if decision := r.Config.PTT.CanaryComplete; decision != nil {
+		basis.Confirmed = decision.Confirmed
+		basis.DecidedBy = decision.DecidedBy
+		basis.Date = decision.Date
+		basis.MinApproved = decision.MinApproved
+	}
+	return basis, nil
 }
 
 // session holds everything opened once per run: inputs, TMDB, keys, MediaInfo.
@@ -280,7 +343,11 @@ func (r *Runner) open(releases []string) (*session, error) {
 	return sess, nil
 }
 
-func (r *Runner) planOptions(sess *session) pttplan.Options {
+func (r *Runner) planOptions(sess *session) (pttplan.Options, error) {
+	basis, err := r.CanaryBasis()
+	if err != nil {
+		return pttplan.Options{}, err
+	}
 	return pttplan.Options{
 		WorkDir:         r.Config.WorkDir,
 		APIKey:          sess.apiKey,
@@ -291,7 +358,8 @@ func (r *Runner) planOptions(sess *session) pttplan.Options {
 		Movies:          sess.movies,
 		MediaInfo:       sess.mediaInfo,
 		Logger:          sess.logger,
-	}
+		CanaryBasis:     basis,
+	}, nil
 }
 
 // evaluate runs the full dry-run for one release: inputs, plan, duplicates, gate.
@@ -304,7 +372,11 @@ func (r *Runner) evaluate(ctx context.Context, sess *session, rel string) (Outco
 	prepared, err := sess.adapter.Prepare(rel, input.PTT)
 	if err == nil {
 		var plan *pttplan.Plan
-		plan, err = pttplan.Build(ctx, prepared, r.planOptions(sess))
+		var opts pttplan.Options
+		opts, err = r.planOptions(sess)
+		if err == nil {
+			plan, err = pttplan.Build(ctx, prepared, opts)
+		}
 		if err == nil {
 			outcome.Status = StatusReady
 			outcome.Plan = plan
@@ -533,6 +605,9 @@ func renderDupe(w io.Writer, d *pttdupe.Result, accepted *DupeAcceptance) {
 }
 
 func renderCanary(w io.Writer, gate CanaryGate) {
+	fmt.Fprintf(w, "podstawa canary: %s (confirmed=%t, decided_by=%q, date=%q, APPROVED=%d, min_approved=%d)\n",
+		gate.Basis.Basis, gate.Basis.Confirmed, gate.Basis.DecidedBy, gate.Basis.Date,
+		gate.Basis.ApprovedCount, gate.Basis.MinApproved)
 	if gate.Ready {
 		fmt.Fprintln(w, "gotowość do canary: TAK (upload nadal wymaga osobnego potwierdzenia Andryou)")
 		return

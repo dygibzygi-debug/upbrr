@@ -78,6 +78,21 @@ type Options struct {
 	// recorded after a preview was reviewed changes that fingerprint. It is
 	// not sent to the tracker.
 	AcceptanceSHA string
+	// CanaryBasis is auditable evidence for the D-5 moderation decision. It is
+	// visible in the plan and fingerprinted, but never sent to the tracker.
+	CanaryBasis CanaryBasis
+}
+
+// CanaryBasis records why the D-5 moderation condition may open. The current
+// APPROVED count is included so a changed evidence set invalidates an older
+// reviewed fingerprint.
+type CanaryBasis struct {
+	Basis         string `json:"basis"`
+	Confirmed     bool   `json:"confirmed"`
+	DecidedBy     string `json:"decided_by,omitempty"`
+	Date          string `json:"date,omitempty"`
+	ApprovedCount int    `json:"approved_count"`
+	MinApproved   int    `json:"min_approved"`
 }
 
 // File is one multipart file of the plan.
@@ -106,8 +121,9 @@ type Plan struct {
 	InfoHash             string `json:"info_hash"`
 	TMInfoHash           string `json:"tm_info_hash"`
 	// TaxonomyConfirmed reports whether owner-confirmed PTT IDs were checked.
-	TaxonomyConfirmed bool     `json:"taxonomy_confirmed"`
-	Warnings          []string `json:"warnings"`
+	TaxonomyConfirmed bool        `json:"taxonomy_confirmed"`
+	Warnings          []string    `json:"warnings"`
+	CanaryBasis       CanaryBasis `json:"canary_basis"`
 	// Fingerprint is SHA-256 over the canonical payload, file digests and, when
 	// a human acceptance applies, that acceptance's candidate-set SHA.
 	Fingerprint string `json:"fingerprint"`
@@ -285,6 +301,7 @@ func build(ctx context.Context, prepared *input.Prepared, opts Options, intent t
 		Payload:              entry.Payload,
 		RawDescriptionSHA256: prepared.DescriptionSHA256,
 		TMInfoHash:           prepared.Manifest.InfoHash,
+		CanaryBasis:          opts.CanaryBasis,
 	}
 	if out.Description, err = verifyEntry(entry, prepared, description, title, uploadPath, tmdbID); err != nil {
 		return nil, none, err
@@ -473,6 +490,7 @@ func fingerprintDocument(p *Plan, acceptanceSHA string) ([]byte, error) {
 		RawDescriptionSHA256 string      `json:"raw_description_sha256"`
 		DescriptionSHA256    string      `json:"description_sha256"`
 		AcceptanceSHA        string      `json:"acceptance_sha,omitempty"`
+		CanaryBasis          CanaryBasis `json:"canary_basis"`
 	}{
 		Tracker:              p.Tracker,
 		Endpoint:             p.Endpoint,
@@ -481,6 +499,7 @@ func fingerprintDocument(p *Plan, acceptanceSHA string) ([]byte, error) {
 		RawDescriptionSHA256: p.RawDescriptionSHA256,
 		DescriptionSHA256:    p.DescriptionSHA256,
 		AcceptanceSHA:        acceptanceSHA,
+		CanaryBasis:          p.CanaryBasis,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pttplan: fingerprint: %w", err)

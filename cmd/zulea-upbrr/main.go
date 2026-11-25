@@ -307,6 +307,13 @@ func runCheckConfig(ctx context.Context, args []string, stdout, stderr io.Writer
 		cfg.PTT.Taxonomy != nil, personal, cfg.PTT.ModQueue, scan)
 	logger := app.NewLogger(stderr, false)
 	runner := &app.Runner{Config: cfg, Logger: logger}
+	basis, err := runner.CanaryBasis()
+	if err != nil {
+		fmt.Fprintf(stderr, "zulea-upbrr check-config: canary: %s\n", logger.Sanitize(err.Error()))
+		return exitUsage
+	}
+	fmt.Fprintf(stdout, "  canary: basis=%s confirmed=%t decided_by=%q date=%q APPROVED=%d min_approved=%d\n",
+		basis.Basis, basis.Confirmed, basis.DecidedBy, basis.Date, basis.ApprovedCount, basis.MinApproved)
 	handled, err := runner.ValidateHandledElsewhere()
 	if err != nil {
 		fmt.Fprintf(stderr, "zulea-upbrr check-config: %s\n", logger.Sanitize(err.Error()))

@@ -189,7 +189,10 @@ func (r *Runner) Upload(ctx context.Context, req UploadRequest) (UploadResult, e
 	if strings.TrimSpace(typed) != phrase {
 		return UploadResult{}, refuse("confirmation phrase did not match; nothing was sent")
 	}
-	opts := r.planOptions(sess)
+	opts, err := r.planOptions(sess)
+	if err != nil {
+		return UploadResult{}, refuse("canary evidence changed or is unreadable: %v", err)
+	}
 	if outcome.Acceptance != nil {
 		opts.AcceptanceSHA = outcome.Acceptance.SHA
 	}

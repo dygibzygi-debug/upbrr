@@ -195,7 +195,9 @@ open only when all of these hold:
   an incomplete search and an empty candidate list never pass. A candidate
   whose name contains `-Zulea` in any letter case, or whose relation is
   `exact_duplicate`, never passes;
-- `personal_release` is decided (not `null`) and `mod_queue` is `true` (D-5);
+- `personal_release` is decided (not `null`) and D-5 has one of two auditable
+  bases: `mod_queue=true`, or `mod_queue=false` with an explicit completed
+  canary decision and enough approved receipts;
 - MediaInfo is `cli` or `file` (D-6);
 - every earlier attempt is settled: `accepted` and `APPROVED` on PTT
   (`ptt-status`), proven `not_sent`, or `rejected` and acknowledged with
@@ -203,6 +205,26 @@ open only when all of these hold:
   unreadable or unknown receipt blocks the queue and the gate.
 
 The gate never uploads. A real upload stays a separate, human-confirmed step.
+
+After the live canary stage is accepted, the owner may explicitly record that
+decision while disabling the voluntary moderation queue:
+
+```json
+"mod_queue": false,
+"canary_complete": {
+  "confirmed": true,
+  "decided_by": "Example Operator",
+  "date": "2026-11-25",
+  "min_approved": 3
+}
+```
+
+`min_approved` must be at least 3. The gate counts only `accepted` receipts
+whose moderation is exactly `APPROVED`. The decision, current count and minimum
+are exposed as `canary.basis` and included in the fingerprint, so changing the
+decision or receipt evidence invalidates an older reviewed plan. Missing,
+malformed or insufficient evidence fails closed. All other upload gates remain
+unchanged.
 
 ## Usage
 
